@@ -1,0 +1,8 @@
+httpx>=0.27
+beautifulsoup4>=4.12
+lxml>=5.0
+tldextract>=5.1
+playwright>=1.45
+tomli>=2.0; python_version < "3.11"
+# optional, for Search Console:
+# google-auth>=2.29

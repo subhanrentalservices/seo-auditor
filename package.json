@@ -1,0 +1,91 @@
+{
+  "name": "seo-auditor",
+  "productName": "SEO Auditor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SEO audits and link building on your own computer: unlimited crawl, issues, health score, Search Console, AI visibility, backlink verification and opportunities.",
+  "author": "SS Automotive Group",
+  "type": "module",
+  "main": "desktop/main.mjs",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "audit": "node src/cli.mjs",
+    "desktop": "electron .",
+    "engine": "node -e \"process.exit(require('child_process').spawnSync(process.platform==='win32'?'backlinks/.venv/Scripts/python':'backlinks/.venv/bin/python',['backlinks/build-engine.py'],{stdio:'inherit'}).status)\"",
+    "dist:win": "npm run engine && electron-builder --win",
+    "dist:mac": "npm run engine && electron-builder --mac"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "chrome-launcher": "^1.2.2",
+    "google-auth-library": "^9.15.1",
+    "lighthouse": "^12.8.2",
+    "playwright": "^1.64.1",
+    "robots-parser": "^3.0.1"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "au.com.ssautomotive.seoauditor",
+    "productName": "SEO Auditor",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "asar": false,
+    "files": [
+      "desktop/**",
+      "src/**",
+      "public/**",
+      "build/icon.*",
+      "package.json",
+      "!data/**",
+      "!backlinks/**",
+      "!release/**"
+    ],
+    "extraResources": [
+      {
+        "from": "backlinks/dist/linkverify",
+        "to": "engine"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SEO Auditor"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.business",
+      "icon": "build/icon.png"
+    }
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site Link Graph</title>
+<style>
+@font-face{font-family:"Archivo";src:url("/fonts/archivo.woff2") format("woff2");font-weight:100 900;font-stretch:62% 125%;font-display:swap}
+:root{
+  --canvas:#eceef1;--sheet:#ffffff;--sunk:#f6f7f9;--ink:#111418;--ink-2:#4a515d;--ink-3:#757c88;--line:#e3e6ea;--line-2:#d3d7dd;
+  --amber:#f5a400;--key:#f5a400;--wire:rgba(17,20,24,.10);
+  --w-green:#0b7a53;--w-amber:#b25500;--w-blue:#2457c5;--w-red:#c8312b;--w-brown:#8a5a2b;--w-grey:#9aa1ac;
+  --film:var(--sheet);--rule:var(--line);--faint:var(--line);--muted:var(--ink-2);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --canvas:#0b0d10;--sheet:#15181d;--sunk:#111418;--ink:#eef0f3;--ink-2:#b0b6c0;--ink-3:#868d99;--line:#252a31;--line-2:#323842;
+  --amber:#ffb21a;--key:#ffb21a;--wire:rgba(238,240,243,.10);
+  --w-green:#3ccf95;--w-amber:#f39a4a;--w-blue:#7aa6ff;--w-red:#ff7a70;--w-brown:#c99a6c;--w-grey:#5d6470;
+}}
+:root[data-theme="dark"]{
+  --canvas:#0b0d10;--sheet:#15181d;--sunk:#111418;--ink:#eef0f3;--ink-2:#b0b6c0;--ink-3:#868d99;--line:#252a31;--line-2:#323842;
+  --amber:#ffb21a;--key:#ffb21a;--wire:rgba(238,240,243,.10);
+  --w-green:#3ccf95;--w-amber:#f39a4a;--w-blue:#7aa6ff;--w-red:#ff7a70;--w-brown:#c99a6c;--w-grey:#5d6470;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--sheet);color:var(--ink);font:15px/1.5 "Archivo","Segoe UI",system-ui,sans-serif}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.wrap{max-width:1280px;margin:0 auto;padding:22px 24px 48px}
+.cond{font-family:"Archivo",sans-serif}
+.tb{display:flex;flex-wrap:wrap;gap:10px 36px;align-items:flex-end;margin:0 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.tb > div:first-child{flex:1 1 100%}
+.tb small{display:block;color:var(--ink-3);font-size:13px}
+.tb h1{font:650 26px/1.1 "Archivo",sans-serif;font-variation-settings:"wdth" 118;margin:2px 0;overflow-wrap:anywhere}
+.tb b{font:650 24px/1.1 "Archivo",sans-serif;font-variation-settings:"wdth" 112;font-variant-numeric:tabular-nums}
+.tb .alert b{color:var(--w-red)}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:28px;margin-bottom:18px}
+.diagram{background:var(--sunk);border-radius:12px}
+#graph{width:100%;height:600px;display:block;cursor:grab;touch-action:none}
+#graph text{font:500 11px "Archivo",sans-serif;fill:var(--ink);paint-order:stroke;stroke:var(--sunk);stroke-width:3px;pointer-events:none}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;padding:10px 14px 12px;font-size:13px;color:var(--ink-3)}
+.key span{display:inline-flex;align-items:center;gap:6px}
+.key i{display:inline-block;width:18px;height:4px;border-radius:2px}
+.key .sq{width:12px;height:10px;border:1.5px solid var(--ink);border-radius:2px}
+.inspect{font-size:14px;align-self:start;position:sticky;top:12px}
+.inspect h2{font:650 19px/1.2 "Archivo",sans-serif;font-variation-settings:"wdth" 112;margin:0 0 4px;overflow-wrap:anywhere}
+.inspect a{overflow-wrap:anywhere;font-size:13px;color:var(--ink-2)}
+.kv{display:grid;grid-template-columns:100px 1fr;gap:6px 12px;margin-top:14px;font-size:14px}
+.kv dt{color:var(--ink-3)}.kv dd{margin:0;font-variant-numeric:tabular-nums}
+.meter{height:6px;background:var(--line);margin-top:6px;border-radius:3px;overflow:hidden}.meter i{display:block;height:100%;background:var(--ink)}
+.inspect ul{margin:6px 0 0;padding-left:18px;font-size:13px;max-height:220px;overflow:auto}
+.hint{color:var(--ink-3)}
+h2.sec{font:650 18px/1.2 "Archivo",sans-serif;font-variation-settings:"wdth" 112;margin:34px 0 10px}
+.dtc{display:grid;grid-template-columns:4px 54px minmax(0,1fr);gap:0 14px;border-bottom:1px solid var(--line)}
+.dtc:first-of-type{border-top:1px solid var(--line)}
+.dtc .stripe{background:var(--w-grey);border-radius:2px;margin:12px 0}
+.dtc.high .stripe{background:var(--w-red)}.dtc.medium .stripe{background:var(--amber)}.dtc.low .stripe{background:var(--w-blue)}.dtc.info .stripe{background:var(--w-grey)}
+.dtc .code{font:700 15px "Archivo",sans-serif;font-variation-settings:"wdth" 118;color:var(--ink-2);padding-top:13px}
+.dtc details{padding:12px 0;min-width:0}
+.dtc summary{cursor:pointer;list-style:none;font-weight:600}
+.dtc summary::-webkit-details-marker{display:none}
+.dtc .sev{font-weight:400;color:var(--ink-3);font-size:13px;margin-left:10px}
+.dtc p{margin:6px 0;color:var(--ink-2);font-size:14px;max-width:72ch}
+.dtc ul{margin:4px 0 0;padding-left:18px;font-size:13px;max-height:240px;overflow:auto}.dtc li{overflow-wrap:anywhere}
+.clear{padding:14px 0;color:var(--w-green);font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:600;color:var(--ink-3);font-size:13px;padding:6px 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+th button{all:unset;cursor:pointer}th button:focus-visible{outline:2px solid var(--amber)}
+th[aria-sort] button::after{content:" ▾"}th[aria-sort="ascending"] button::after{content:" ▴"}
+td{padding:8px 10px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td.u{overflow-wrap:anywhere}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+td .t{color:var(--ink-3);font-size:12.5px}
+.bar{display:inline-block;width:70px;height:6px;background:var(--line);vertical-align:middle;border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ink)}
+.st-ok{color:var(--w-green)}.st-bad{color:var(--w-red)}.st-mid{color:var(--w-amber)}
+input[type=search]{width:100%;max-width:420px;border:0;border-radius:8px;padding:8px 11px;background:var(--sunk);box-shadow:inset 0 0 0 1px var(--line-2);color:var(--ink);font:inherit;margin-bottom:10px}
+.tablewrap{overflow-x:auto}
+.sheet{background:none}
+.embed .tb,.embed .faults-sec{display:none}.embed .wrap{padding-top:4px}
+@media (max-width:980px){.cols{grid-template-columns:1fr}.inspect{position:static}#graph{height:440px}.hide-sm{display:none}.wrap{padding:16px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="tb" id="tb"></header>
+  <div class="cols">
+    <section class="sheet diagram" aria-label="Link diagram">
+      <svg id="graph" role="img" aria-label="Diagram of your pages and the links between them"></svg>
+      <div class="key">
+        <span><i class="sq" style="background:var(--key)"></i>Home</span>
+        <span><i class="sq" style="background:var(--sheet)"></i>Page</span>
+        <span><i class="sq" style="background:var(--w-green)"></i>Article</span>
+        <span><i class="sq" style="background:var(--w-grey)"></i>Not indexable</span>
+        <span><i class="sq" style="background:var(--w-red)"></i>Broken</span>
+        <span><i style="background:var(--w-brown)"></i>Backlink from another site</span>
+        <span>Block size shows internal link strength. Drag blocks; click one to trace its wires.</span>
+      </div>
+    </section>
+    <aside class="sheet inspect" id="info" aria-live="polite"><h2>Trace a page</h2><p class="hint">Click any block in the diagram to see which pages feed it, where it sends strength, and its backlinks.</p></aside>
+  </div>
+
+  <div class="faults-sec"><h2 class="sec">Fault codes</h2>
+  <div id="issues"></div></div>
+
+  <h2 class="sec">Every page</h2>
+  <input type="search" id="q" placeholder="Filter by address or title" aria-label="Filter pages">
+  <div class="tablewrap"><table><thead><tr>
+    <th data-k="url"><button>Page</button></th><th data-k="pagerank" class="n"><button>Strength</button></th><th data-k="inbound" class="n"><button>Links in</button></th>
+    <th data-k="out" class="n hide-sm"><button>Links out</button></th><th data-k="depth" class="n hide-sm"><button>Clicks from home</button></th>
+    <th data-k="backlinks" class="n"><button>Backlinks</button></th><th data-k="status"><button>State</button></th></tr></thead><tbody id="rows"></tbody></table></div>
+
+  <h2 class="sec">Sites you link out to</h2>
+  <div class="tablewrap"><table><thead><tr><th>Site</th><th class="n">Pages with the link</th><th>Link type</th></tr></thead><tbody id="ext"></tbody></table></div>
+</div>
+<script>
+const DATA = /*__DATA__*/null;
+if (/[?&]embed\b/.test(location.search)) document.documentElement.classList.add("embed");  // inside the app: it shows the summary itself
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const short = u => u.replace(/^https?:\/\/[^/]+/, "") || "/";
+const S = DATA.summary;
+const CODES = {host_variant: "D01", temp_redirect: "D02", broken_internal: "L01", broken_external: "L02", unverified_external: "L08", orphan: "L03", redirect_internal: "L04", deep: "L05", unreached: "L06",
+  weak_internal: "L07", sitemap_bad: "S01", not_in_sitemap: "S02", noindex_linked: "I01", canonical_other: "I02",
+  dup_title: "C01", h1: "C02", no_description: "C03", thin: "C04", no_backlinks: "B01"};
+const SEV = {high: "Fix first", medium: "Fix soon", low: "Tidy up", info: "For outreach"};
+const faults = DATA.issues.filter(i => i.severity === "high" || i.severity === "medium").length;
+const crawled = new Date(DATA.crawled_at);
+$("#tb").innerHTML = `<div><small>Link diagram of</small><h1>${esc(DATA.site)}</h1><small>Drawn ${esc(crawled.toLocaleDateString(undefined, {day: "numeric", month: "short", year: "numeric"}))}, ${esc(crawled.toLocaleTimeString(undefined, {hour: "numeric", minute: "2-digit"}))}${DATA.notes.length ? ". " + esc(DATA.notes.join(" ")) : ""}</small></div>` +
+  [["Pages", S.pages], ["Indexable", S.indexable], ["Internal links", S.internal_links], ["Deepest page", S.max_depth + (S.max_depth === 1 ? " click" : " clicks")],
+   ["Backlinks counting", `${S.backlinks_counting} of ${S.backlinks}`], ["Faults to fix", faults]]
+  .map(([k, v], i) => `<div${i === 5 && faults ? ' class="alert"' : ""}><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join("");
+
+$("#issues").innerHTML = DATA.issues.length ? DATA.issues.map((i, n) => `<div class="dtc ${i.severity}"><div class="stripe"></div><div class="code">${CODES[i.kind] || "X"}</div>
+  <details${n < 3 && i.severity !== "info" ? " open" : ""}><summary>${esc(i.title)}<span class="sev">${SEV[i.severity] || ""}</span></summary>
+  <p>${esc(i.fix)}</p><ul>${i.pages.map(p => `<li>${esc(p.replace(/https?:\/\/[^/ ]+/g, m => m.includes(DATA.site) ? "" : m) || "/")}</li>`).join("")}</ul></details></div>`).join("")
+  : `<div class="clear">No faults found. Every page is reachable, indexable and linked.</div>`;
+
+// ---------------------------------------------------------------- diagram
+const pages = DATA.pages.filter(p => p.status === 200 || p.error || p.status >= 400);
+const byUrl = new Map(pages.map(p => [p.url, p]));
+const nodes = pages.map(p => ({id: p.url, p, s: 9 + Math.sqrt(p.pagerank || 0) * 1.5, kind:
+  p.url === DATA.home ? "home" : (p.error || p.status >= 400) ? "bad" : !p.indexable ? "noidx" : /\/(blog|news|articles?|posts?|guides?)\//i.test(p.url) ? "blog" : "page"}));
+const edges = [];
+pages.forEach(p => (p.out || []).forEach(t => { if (byUrl.has(t) && t !== p.url) edges.push([p.url, t, "int"]); }));
+Object.entries(DATA.referring || {}).forEach(([page, refs]) => refs.forEach(r => {
+  const id = "ext:" + r.source; if (!nodes.find(n => n.id === id)) nodes.push({id, s: 7, kind: "ext", ref: r});
+  if (byUrl.has(page)) edges.push([id, page, "ext"]);
+}));
+const idx = new Map(nodes.map((n, i) => [n.id, i]));
+const E = edges.map(([a, b, t]) => [idx.get(a), idx.get(b), t]).filter(([a, b]) => a !== undefined && b !== undefined);
+const W = 1000, H = 640;
+nodes.forEach((n, i) => { const a = i * 2.399, rr = 40 + 9 * Math.sqrt(i); n.x = W / 2 + rr * Math.cos(a); n.y = H / 2 + rr * Math.sin(a); n.vx = n.vy = 0; });
+const home = nodes[idx.get(DATA.home)];
+let pinHome = true;
+function tick(alpha) {
+  const N = nodes.length;
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+    const a = nodes[i], b = nodes[j]; const dx = b.x - a.x, dy = b.y - a.y; const d2 = dx * dx + dy * dy || 0.01;
+    if (d2 > 90000) continue; const f = 1100 * alpha / d2, d = Math.sqrt(d2);
+    a.vx -= f * dx / d; a.vy -= f * dy / d; b.vx += f * dx / d; b.vy += f * dy / d;
+  }
+  const k = 0.02 * alpha * (E.length > 4 * N ? 4 * N / E.length : 1);
+  E.forEach(([s, t]) => { const a = nodes[s], b = nodes[t]; const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, f = (d - 80) * k;
+    a.vx += f * dx / d; a.vy += f * dy / d; b.vx -= f * dx / d; b.vy -= f * dy / d; });
+  nodes.forEach(n => { n.vx += (W / 2 - n.x) * 0.004 * alpha; n.vy += (H / 2 - n.y) * 0.004 * alpha;
+    if (!n.fixed) { n.x += n.vx; n.y += n.vy; } n.vx *= 0.6; n.vy *= 0.6; });
+  if (home && pinHome) { home.x = W / 2; home.y = H / 2; }
+}
+for (let i = 0; i < 300; i++) tick(1 - i / 320);
+pinHome = false;
+(function fit() {
+  const pad = 46, xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const k = Math.min((W - 2 * pad) / ((x1 - x0) || 1), (H - 2 * pad) / ((y1 - y0) || 1));
+  const ox = (W - k * (x1 - x0)) / 2, oy = (H - k * (y1 - y0)) / 2;
+  nodes.forEach(n => { n.x = ox + (n.x - x0) * k; n.y = oy + (n.y - y0) * k; });
+})();
+
+const svg = $("#graph"); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+const NS = "http://www.w3.org/2000/svg", el = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+const gE = el("g", {}), gN = el("g", {}), gL = el("g", {}); svg.append(gE, gN, gL);
+const FILL = {home: "var(--key)", page: "var(--sheet)", blog: "var(--w-green)", noidx: "var(--w-grey)", bad: "var(--w-red)", ext: "var(--w-brown)"};
+const wires = E.map(([s, t, ty]) => { const p = el("path", {fill: "none", stroke: ty === "ext" ? "var(--w-brown)" : "var(--wire)", "stroke-width": ty === "ext" ? 2 : 1}); gE.append(p); return p; });
+const blocks = nodes.map((n, i) => {
+  const g = el("g", {role: "button", "aria-label": n.p ? short(n.p.url) : n.ref.source}); g.dataset.i = i; g.style.cursor = "pointer";
+  const w = n.kind === "ext" ? n.s : n.s * 1.5;
+  const r = el(n.kind === "ext" ? "circle" : "rect", n.kind === "ext" ? {r: n.s / 1.6, fill: FILL.ext} : {width: w, height: n.s, x: -w / 2, y: -n.s / 2, rx: 1.5,
+    fill: FILL[n.kind], stroke: "var(--ink)", "stroke-width": 1.2});
+  r.dataset.i = i; g.append(r); gN.append(g); return g;
+});
+// label the strongest pages so the diagram reads without hovering
+const labelled = new Set(nodes.map((n, i) => [n.p ? n.p.pagerank : -1, i]).sort((a, b) => b[0] - a[0]).slice(0, 14).map(x => x[1]));
+labelled.forEach(i => blocks[i].setAttribute("tabindex", "0"));  // keyboard: only the labelled pages; the table below lists every page
+const labels = nodes.map((n, i) => { const t = el("text", {"text-anchor": "middle"}); t.textContent = n.p ? short(n.p.url).replace(/\.html?$/, "").slice(0, 32) : ""; gL.append(t); return t; });
+function curve(a, b) { const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, dx = b.x - a.x, dy = b.y - a.y; return `M${a.x},${a.y} Q${mx - dy * 0.12},${my + dx * 0.12} ${b.x},${b.y}`; }
+let sel = null;
+function draw() {
+  E.forEach(([s, t], i) => wires[i].setAttribute("d", curve(nodes[s], nodes[t])));
+  nodes.forEach((n, i) => { blocks[i].setAttribute("transform", `translate(${n.x},${n.y})`);
+    labels[i].setAttribute("x", n.x); labels[i].setAttribute("y", n.y - n.s / 2 - 5);
+    labels[i].style.display = (sel === null ? labelled.has(i) : (i === sel || nb.has(i) && labelled.has(i))) ? "" : "none"; });
+}
+let nb = new Set();
+function select(i) {
+  sel = i; nb = new Set([i]); const n = nodes[i];
+  E.forEach(([s, t, ty], k) => { const into = t === i, from = s === i;
+    wires[k].setAttribute("stroke", into ? "var(--w-green)" : from ? "var(--w-blue)" : ty === "ext" ? "var(--w-brown)" : "var(--wire)");
+    wires[k].setAttribute("stroke-width", into || from ? 1.8 : ty === "ext" ? 2 : 1);
+    wires[k].style.opacity = into || from ? 1 : 0.35; if (into || from) { nb.add(s); nb.add(t); } });
+  blocks.forEach((b, k) => b.style.opacity = nb.has(k) ? 1 : 0.3);
+  draw();
+  if (n.ref) { $("#info").innerHTML = `<h2>Backlink</h2><a href="${esc(n.ref.source)}" target="_blank" rel="noreferrer">${esc(n.ref.source)}</a><dl class="kv"><dt>Verdict</dt><dd>${esc(n.ref.verdict || "not checked yet")}</dd><dt>Link number</dt><dd>${n.ref.id}</dd></dl>`; return; }
+  const p = n.p, refs = (DATA.referring || {})[p.url] || [];
+  const inbound = pages.filter(q => (q.out || []).includes(p.url)).map(q => short(q.url));
+  const state = p.error || (p.status !== 200 ? "HTTP " + p.status : p.noindex ? "noindex" : p.indexable ? "indexable" : "not indexable");
+  $("#info").innerHTML = `<h2>${esc(p.title || short(p.url))}</h2><a href="${esc(p.url)}" target="_blank" rel="noreferrer">${esc(short(p.url))}</a>
+    <dl class="kv"><dt>State</dt><dd>${esc(state)}</dd>
+    <dt>Strength</dt><dd>${p.pagerank} of 100<div class="meter"><i style="width:${p.pagerank}%"></i></div></dd>
+    <dt>From home</dt><dd>${p.depth == null ? "no link path" : p.depth + (p.depth === 1 ? " click" : " clicks")}</dd>
+    <dt>Wires in</dt><dd><span style="color:var(--w-green)">${p.inbound} page${p.inbound === 1 ? "" : "s"}</span></dd>
+    <dt>Wires out</dt><dd><span style="color:var(--w-blue)">${(p.out || []).length} pages</span>, ${Object.keys(p.external || {}).length} other sites</dd>
+    <dt>Backlinks</dt><dd>${refs.length ? refs.map(r => `<a href="${esc(r.source)}" target="_blank" rel="noreferrer">${esc(r.site)}</a> (${esc(r.verdict || "not checked")})`).join(", ") : "none logged yet"}</dd>
+    <dt>Sitemap</dt><dd>${p.in_sitemap ? "listed" : "missing"}</dd><dt>Words, H1s</dt><dd>${p.words}, ${p.h1}</dd></dl>
+    ${inbound.length && inbound.length <= 15 ? `<p class="hint" style="margin:12px 0 0">Fed by</p><ul>${inbound.map(u => `<li>${esc(u)}</li>`).join("")}</ul>` : ""}`;
+}
+function clearSel() { sel = null; nb = new Set(); blocks.forEach(b => b.style.opacity = 1);
+  E.forEach(([s, t, ty], k) => { wires[k].setAttribute("stroke", ty === "ext" ? "var(--w-brown)" : "var(--wire)"); wires[k].setAttribute("stroke-width", ty === "ext" ? 2 : 1); wires[k].style.opacity = 1; }); draw(); }
+draw();
+let drag = null, moved = false;
+const pt = e => { const r = svg.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
+svg.addEventListener("pointerdown", e => { const i = e.target.dataset?.i; if (i === undefined) { clearSel(); return; } drag = +i; moved = false; nodes[drag].fixed = true; svg.setPointerCapture(e.pointerId); select(drag); });
+svg.addEventListener("pointermove", e => { if (drag === null) return; moved = true; const [x, y] = pt(e); nodes[drag].x = x; nodes[drag].y = y; for (let k = 0; k < 2; k++) tick(0.04); draw(); });
+svg.addEventListener("pointerup", () => { drag = null; });
+gN.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.dataset.i !== undefined) { e.preventDefault(); select(+e.target.dataset.i); } });
+
+// ---------------------------------------------------------------- tables
+let sortK = "pagerank", sortD = -1;
+const stateOf = p => p.error ? ["st-bad", "unreachable"] : p.status >= 400 ? ["st-bad", "HTTP " + p.status] : p.blocked ? ["st-mid", "blocked by robots.txt"]
+  : p.redirect.length ? ["st-mid", "redirects"] : p.noindex ? ["st-mid", "noindex"] : p.indexable ? ["st-ok", "indexable"] : ["st-mid", "canonical elsewhere"];
+function rows() {
+  const q = $("#q").value.trim().toLowerCase();
+  const list = DATA.pages.filter(p => !q || (p.url + " " + p.title).toLowerCase().includes(q)).map(p => ({...p, out: (p.out || []).length, status: stateOf(p)[1]}));
+  list.sort((a, b) => { const x = a[sortK] ?? -1, y = b[sortK] ?? -1; return (x > y ? 1 : x < y ? -1 : 0) * sortD; });
+  $("#rows").innerHTML = list.map(p => { const [c, s] = stateOf(p); return `<tr><td class="u">${esc(short(p.url))}<div class="t">${esc(p.title)}</div></td>
+    <td class="n"><span class="bar" title="${p.pagerank} of 100"><i style="width:${p.pagerank}%"></i></span></td><td class="n">${p.inbound}</td><td class="n hide-sm">${p.out}</td>
+    <td class="n hide-sm">${p.depth ?? "–"}</td><td class="n">${p.backlinks ? `${p.backlinks_counting} of ${p.backlinks}` : "–"}</td><td class="${c}">${esc(s)}</td></tr>`; }).join("");
+  document.querySelectorAll("th[data-k]").forEach(th => th.dataset.k === sortK ? th.setAttribute("aria-sort", sortD > 0 ? "ascending" : "descending") : th.removeAttribute("aria-sort"));
+}
+document.querySelectorAll("th[data-k] button").forEach(b => b.onclick = () => { const k = b.parentNode.dataset.k; sortD = sortK === k ? -sortD : (k === "url" || k === "status" ? 1 : -1); sortK = k; rows(); });
+$("#q").oninput = rows; rows();
+$("#ext").innerHTML = S.external.map(e => `<tr><td>${esc(e.site)}</td><td class="n">${e.pages}</td><td>${esc(e.rels.join(", "))}</td></tr>`).join("") || `<tr><td colspan="3" class="hint">You don't link to any other sites.</td></tr>`;
+</script>
+</body>
+</html>

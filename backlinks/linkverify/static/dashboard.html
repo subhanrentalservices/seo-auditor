@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backlink Verifier</title>
+<style>
+:root{
+  --bg:#f6f5f2;--panel:#fff;--fg:#1c1c1a;--muted:#6d6c67;--line:#e3e1db;--soft:#efede8;
+  --counts:#1f7a4d;--weak:#a15c07;--pending:#2f5fb3;--not:#b42318;--none:#8a8984;--accent:#1c1c1a;
+  --counts-bg:#e6f3ec;--weak-bg:#fbefdf;--pending-bg:#e7eefb;--not-bg:#fbe9e7;--none-bg:#efeeea;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#141413;--panel:#1c1c1a;--fg:#ecebe7;--muted:#a19f99;--line:#2e2d2a;--soft:#252522;
+  --counts:#53c38f;--weak:#e3a446;--pending:#7da8f0;--not:#f2786d;--none:#86847e;--accent:#ecebe7;
+  --counts-bg:#173326;--weak-bg:#3a2a12;--pending-bg:#18253d;--not-bg:#3b1a17;--none-bg:#2a2a27;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:inherit}
+.wrap{max-width:1240px;margin:0 auto;padding:24px 16px 64px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:20px}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:2px 0 0;font-size:13px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 14px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.small{padding:3px 10px;font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;cursor:pointer;text-align:left}
+.tile.on{border-color:var(--fg)}
+.tile b{display:block;font-size:26px;line-height:1.2}
+.tile span{color:var(--muted);font-size:13px}
+.tile .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px;border-bottom:1px solid var(--line)}
+.toolbar input{flex:1;min-width:180px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--bg)}
+.toolbar select{border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--bg)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--soft)}
+tbody tr:last-child td{border-bottom:0}
+td.url{max-width:420px;overflow-wrap:anywhere}
+td.url .u{font-weight:500}
+td.url .t{color:var(--muted);font-size:12px}
+.badge{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.b-Counts{background:var(--counts-bg);color:var(--counts)}.b-Weak{background:var(--weak-bg);color:var(--weak)}
+.b-Pending{background:var(--pending-bg);color:var(--pending)}.b-Not{background:var(--not-bg);color:var(--not)}
+.b-none{background:var(--none-bg);color:var(--none)}
+.muted{color:var(--muted)}.num{font-variant-numeric:tabular-nums}
+.empty{padding:40px 16px;text-align:center;color:var(--muted)}
+.side h2{font-size:14px;margin:0;padding:12px 14px;border-bottom:1px solid var(--line)}
+.ev{padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;cursor:pointer}
+.ev:last-child{border-bottom:0}.ev:hover{background:var(--soft)}
+.ev .when{color:var(--muted);font-size:12px}
+.sev{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.sev-bad{background:var(--not)}.sev-good{background:var(--counts)}.sev-info{background:var(--none)}
+.status{margin-top:10px;padding:10px 14px;font-size:13px}
+.status .bar{height:4px;background:var(--soft);border-radius:4px;overflow:hidden;margin-top:6px}
+.status .bar i{display:block;height:100%;background:var(--pending);width:30%;animation:slide 1.2s infinite ease-in-out}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--fg);width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 48px)}
+dialog::backdrop{background:rgba(0,0,0,.35)}
+.dlg-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:16px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+.dlg-head h3{margin:0;font-size:16px;overflow-wrap:anywhere}
+.dlg-body{padding:16px 18px}
+.dlg-body h4{margin:18px 0 8px;font-size:13px}
+.checks{list-style:none;margin:0;padding:0}
+.checks li{display:grid;grid-template-columns:46px 1fr;gap:6px;padding:4px 0;font-size:13px;border-bottom:1px dashed var(--line)}
+.checks li:last-child{border-bottom:0}
+.s{font-size:11px;font-weight:700;text-transform:uppercase;padding-top:1px}
+.s-pass{color:var(--counts)}.s-warn{color:var(--weak)}.s-fail{color:var(--not)}.s-skip,.s-info{color:var(--none)}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:4px 12px;font-size:13px}
+.kv div:nth-child(odd){color:var(--muted)}
+.hist{display:flex;gap:4px;flex-wrap:wrap}
+.hist span{width:14px;height:14px;border-radius:3px}
+.h-Counts{background:var(--counts)}.h-Weak{background:var(--weak)}.h-Pending{background:var(--pending)}.h-Not{background:var(--not)}
+.shot{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:6px}
+form label{display:block;font-size:13px;margin:10px 0 4px}
+form input,form textarea,.dlg-body input{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.err{color:var(--not);font-size:13px;min-height:18px;margin-top:8px}
+.foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.why{background:var(--soft);border-radius:8px;padding:10px 12px;font-size:13px}
+.why li{margin:2px 0}
+.tabs{display:flex;gap:4px;margin:0 0 16px;border-bottom:1px solid var(--line)}
+.tab{border:0;background:none;padding:8px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--muted)}
+.tab.on{color:var(--fg);border-bottom-color:var(--fg);font-weight:600}
+.oppbar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;margin-bottom:12px}
+.oppbar select,.st{border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--bg)}
+.score{display:inline-block;min-width:34px;text-align:center;font-weight:700;border-radius:6px;padding:1px 6px;font-variant-numeric:tabular-nums}
+.sc-hi{background:var(--counts-bg);color:var(--counts)}.sc-mid{background:var(--pending-bg);color:var(--pending)}.sc-lo{background:var(--none-bg);color:var(--none)}
+.kind{font-size:12px;color:var(--muted)}
+pre.req{white-space:pre-wrap;font:13px/1.5 inherit;background:var(--soft);border-radius:8px;padding:10px 12px;max-height:280px;overflow:auto;margin:0}
+textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg)}
+.draft input,.draft textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--fg);font:inherit}
+.draft textarea{min-height:260px;line-height:1.5}
+.draft label{display:block;font-size:13px;margin:10px 0 4px;color:var(--muted)}
+.ph{background:var(--weak-bg,var(--soft));color:var(--weak);border-radius:8px;padding:8px 12px;font-size:13px;margin-top:8px}
+.camp{margin-bottom:14px}
+.camp-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;padding:14px 16px;border-bottom:1px solid var(--line)}
+.camp-head h3{margin:0;font-size:15px}
+.stats{display:flex;gap:18px;flex-wrap:wrap;padding:10px 16px;font-size:13px;border-bottom:1px solid var(--line)}
+.stats b{font-size:18px;display:block;font-variant-numeric:tabular-nums}
+.pill{display:inline-block;font-size:11px;border-radius:999px;padding:1px 8px;background:var(--soft);color:var(--muted)}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--accent);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+@media (max-width:980px){.grid{grid-template-columns:1fr}.tiles{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:640px){.tiles{grid-template-columns:repeat(2,1fr)}.hide-sm{display:none}.row2{grid-template-columns:1fr}.kv{grid-template-columns:100px 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Backlink Verifier</h1>
+      <p class="sub" id="sub">Loading…</p>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btnDue">Check due links</button>
+      <button class="btn" id="btnAll">Re-check all</button>
+      <button class="btn primary" id="btnAdd">Add link</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab on" data-tab="links" role="tab">Links</button>
+    <button class="tab" data-tab="opps" role="tab">Opportunities <span id="oppCount" class="muted"></span></button>
+    <button class="tab" data-tab="camps" role="tab">Campaigns</button>
+    <button class="tab" data-tab="graph" role="tab">Site graph</button>
+  </nav>
+
+  <section id="viewOpps" hidden>
+    <div class="panel oppbar">
+      <div>
+        <div id="oppSub" class="muted" style="font-size:13px"></div>
+        <div id="finderState" style="font-size:13px;margin-top:4px"></div>
+      </div>
+      <div class="actions">
+        <select id="findWhich" aria-label="Finder">
+          <option value="all">All finders</option>
+          <option value="mentions">Unlinked mentions</option>
+          <option value="journalists">Journalist requests</option>
+          <option value="gap">Competitor gap</option>
+          <option value="broken">Broken competitor links</option>
+          <option value="resources">Resource pages</option>
+          <option value="campaigns">Campaign pickups</option>
+        </select>
+        <button class="btn primary" id="btnFind">Find now</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="toolbar">
+        <input id="oq" type="search" placeholder="Search title, site or notes">
+        <select id="okind" aria-label="Type">
+          <option value="">All types</option>
+          <option value="unlinked_mention">Unlinked mentions</option>
+          <option value="journalist">Journalist requests</option>
+          <option value="gap">Competitor gap</option>
+          <option value="broken_backlink">Broken competitor links</option>
+          <option value="broken_link">Broken links on resource pages</option>
+          <option value="resource_page">Resource pages</option>
+        </select>
+        <select id="ostatus" aria-label="Status">
+          <option value="open">Open (new, working, pitched)</option>
+          <option value="">All statuses</option>
+          <option value="new">New</option><option value="working">Working</option><option value="pitched">Pitched</option>
+          <option value="won">Won</option><option value="lost">Lost</option><option value="ignored">Ignored</option>
+        </select>
+      </div>
+      <table>
+        <thead><tr><th class="num">Score</th><th>Opportunity</th><th class="hide-sm">Type</th><th>Status</th><th class="hide-sm">Found</th></tr></thead>
+        <tbody id="orows"></tbody>
+      </table>
+      <div class="empty" id="oempty" hidden></div>
+    </div>
+    <div class="panel" id="platformPanel" style="margin-top:18px" hidden>
+      <div class="side"><h2>Platforms you tested</h2></div>
+      <table><thead><tr><th>Site</th><th>Result</th><th class="hide-sm">Tested</th></tr></thead><tbody id="prows"></tbody></table>
+    </div>
+  </section>
+
+  <section id="viewCamps" hidden>
+    <div class="panel" style="padding:14px 16px;margin-bottom:14px">
+      <form id="formCamp">
+        <div style="font-weight:600">Track a data study or PR campaign</div>
+        <div class="muted" style="font-size:13px;margin-top:2px" id="campSub">Every week the monitor looks for new pages that link to the study, and for pages that write about it without a link.</div>
+        <div class="row2">
+          <div><label for="cName">Name</label><input id="cName" placeholder="2026 car rental price study" required></div>
+          <div><label for="cAsset">Study URL</label><input id="cAsset" placeholder="https://yoursite.com/price-study" required></div>
+        </div>
+        <div class="row2">
+          <div><label for="cPhrases">Phrases people will use when they write about it (one per line)</label>
+            <textarea id="cPhrases" placeholder="car rental prices rose 18%&#10;YourBrand price study"></textarea></div>
+          <div><label for="cStart">Launch date</label><input id="cStart" type="date">
+            <div class="foot" style="justify-content:flex-start"><button class="btn primary" type="submit">Add campaign</button></div>
+            <div class="err" id="campErr"></div></div>
+        </div>
+      </form>
+    </div>
+    <div id="campState" style="font-size:13px;margin:0 0 10px"></div>
+    <div id="campList"></div>
+  </section>
+
+  <section id="viewGraph" hidden>
+    <div class="panel oppbar">
+      <div><div id="graphSub" class="muted" style="font-size:13px"></div><div id="graphState" style="font-size:13px;margin-top:4px"></div></div>
+      <div class="actions"><a class="btn" id="graphOpen" href="/graph" target="_blank" rel="noreferrer">Open full screen</a><button class="btn primary" id="btnGraph">Map my site</button></div>
+    </div>
+    <iframe id="graphFrame" title="Site link graph" style="width:100%;height:calc(100vh - 230px);min-height:560px;border:1px solid var(--line);border-radius:12px;background:var(--panel)"></iframe>
+  </section>
+
+  <section id="viewLinks">
+  <div class="tiles" id="tiles"></div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="Search linking page, target, anchor or strategy">
+        <select id="sort" aria-label="Sort">
+          <option value="newest">Newest first</option>
+          <option value="verdict">Worst verdict first</option>
+          <option value="dr">Highest DR first</option>
+          <option value="checked">Last checked</option>
+          <option value="due">Next re-check</option>
+        </select>
+      </div>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Linking page</th><th>Verdict</th><th class="hide-sm">rel</th>
+          <th class="hide-sm num">DR</th><th class="hide-sm">Anchor</th><th class="hide-sm">Last checked</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty" hidden>No links yet. Click <b>Add link</b> to log a link you placed.</div>
+    </div>
+
+    <aside>
+      <div class="panel side">
+        <h2>Recent changes</h2>
+        <div id="events"></div>
+      </div>
+      <div class="panel status" id="status"></div>
+    </aside>
+  </div>
+  </section>
+</div>
+
+<dialog id="dlgOpp">
+  <div class="dlg-head">
+    <div><h3 id="oTitle"></h3><div class="muted" id="oSub" style="font-size:13px"></div></div>
+    <div class="actions"><button class="btn small" data-close>Close</button></div>
+  </div>
+  <div class="dlg-body" id="oBody"></div>
+</dialog>
+
+<dialog id="dlgAdd">
+  <form id="formAdd" method="dialog">
+    <div class="dlg-head"><h3>Add a link you placed</h3><button class="btn small" type="button" data-close>Close</button></div>
+    <div class="dlg-body">
+      <label for="fUrl">Linking page (the page that should link to you)</label>
+      <input id="fUrl" required placeholder="https://news-site.com/article">
+      <label for="fTarget">Your site or page</label>
+      <input id="fTarget" required placeholder="yoursite.com  or  https://yoursite.com/page">
+      <div class="row2">
+        <div><label for="fStrategy">Strategy</label><input id="fStrategy" placeholder="journalist request, guest post…"></div>
+        <div><label for="fNotes">Notes</label><input id="fNotes" placeholder="optional"></div>
+      </div>
+      <div class="err" id="addErr"></div>
+      <div class="foot">
+        <button class="btn" type="button" data-close>Cancel</button>
+        <button class="btn primary" type="submit">Add and check</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgLink">
+  <div class="dlg-head">
+    <div><h3 id="dTitle"></h3><div class="muted" id="dSub" style="font-size:13px"></div></div>
+    <div class="actions">
+      <button class="btn small" id="dCheck">Re-check</button>
+      <button class="btn small" id="dDelete">Remove</button>
+      <button class="btn small" data-close>Close</button>
+    </div>
+  </div>
+  <div class="dlg-body" id="dBody"></div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const ORDER = ["Not counted", "Weak", "Pending", "Counts"];
+const COLORS = {"Counts":"var(--counts)","Weak":"var(--weak)","Pending":"var(--pending)","Not counted":"var(--not)"};
+let state = null, filter = "all", openId = null, timer = null;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cls = v => v === "Not counted" ? "Not" : (v || "none");
+const badge = v => `<span class="badge b-${cls(v)}">${esc(v || "Not checked")}</span>`;
+const when = iso => {
+  if (!iso) return "never";
+  const d = new Date(iso), diff = (Date.now() - d) / 1000;
+  if (diff < 0) { const days = Math.ceil(-diff / 86400); return days <= 1 ? "within a day" : `in ${days} days`; }
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} h ago`;
+  return `${Math.floor(diff / 86400)} d ago`;
+};
+const toast = msg => { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); };
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-LV-Token": TOKEN}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  const data = r.headers.get("content-type")?.includes("json") ? await r.json() : null;
+  if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+  return data;
+}
+
+async function refresh() {
+  try { state = await api("/api/summary"); } catch (e) { $("#sub").textContent = "Lost connection to the dashboard server. Is its window still open?"; return; }
+  render();
+  const busy = state.jobs.running !== null || state.jobs.queued.length;
+  clearTimeout(timer);
+  timer = setTimeout(refresh, busy ? 1500 : 15000);
+  if (openId && !busy) { const d = $("#dlgLink"); if (d.open && d.dataset.stale === "1") { d.dataset.stale = "0"; openLink(openId); } }
+}
+
+function render() {
+  const s = state, n = s.links.length;
+  const f = s.features;
+  const extras = [f.dr ? "Ahrefs DR/UR on" : "DR off (no Ahrefs key)", f.index ? "index check on" : "index check off", f.alerts.length ? `alerts: ${f.alerts.join(" + ")}` : "alerts off"];
+  $("#sub").textContent = `${n} link${n === 1 ? "" : "s"} · ${s.due} due for a re-check · ${extras.join(" · ")}`;
+  $("#btnDue").textContent = s.due ? `Check due links (${s.due})` : "Check due links";
+  $("#btnDue").disabled = !s.due;
+  $("#btnAll").disabled = !n;
+
+  const tiles = [["Counts", s.counts["Counts"]], ["Weak", s.counts["Weak"]], ["Pending", s.counts["Pending"]], ["Not counted", s.counts["Not counted"]], ["Not checked", s.unchecked]];
+  $("#tiles").innerHTML = tiles.map(([k, v]) => `<button class="tile${filter === k ? " on" : ""}" data-f="${esc(k)}"><b class="num">${v}</b><span><i class="dot" style="background:${COLORS[k] || "var(--none)"}"></i>${esc(k)}</span></button>`).join("");
+  document.querySelectorAll(".tile").forEach(t => t.onclick = () => { filter = filter === t.dataset.f ? "all" : t.dataset.f; render(); });
+
+  const q = $("#q").value.trim().toLowerCase();
+  let rows = s.links.filter(l => filter === "all" || (filter === "Not checked" ? !l.verdict : l.verdict === filter));
+  if (q) rows = rows.filter(l => [l.source_url, l.target, l.anchor, l.strategy, l.notes].join(" ").toLowerCase().includes(q));
+  const sort = $("#sort").value;
+  const rank = v => v ? ORDER.indexOf(v) : -1;
+  rows.sort((a, b) => sort === "verdict" ? rank(a.verdict) - rank(b.verdict) || b.id - a.id
+    : sort === "dr" ? (b.dr ?? -1) - (a.dr ?? -1) || b.id - a.id
+    : sort === "checked" ? String(b.last_checked || "").localeCompare(String(a.last_checked || ""))
+    : sort === "due" ? String(a.next_due).localeCompare(String(b.next_due))
+    : b.id - a.id);
+
+  const running = s.jobs.running, queued = new Set(s.jobs.queued);
+  $("#rows").innerHTML = rows.map(l => {
+    const job = running === l.id ? '<span class="muted">checking…</span>' : queued.has(l.id) ? '<span class="muted">queued</span>' : `<button class="btn small" data-check="${l.id}">Re-check</button>`;
+    return `<tr data-id="${l.id}">
+      <td class="muted num">${l.id}</td>
+      <td class="url"><div class="u">${esc(l.source_url)}</div><div class="t">→ ${esc(l.target)}${l.strategy ? " · " + esc(l.strategy) : ""}</div></td>
+      <td>${badge(l.verdict)}</td>
+      <td class="hide-sm">${l.verdict ? esc(l.rel.join(" ") || "none") : ""}</td>
+      <td class="hide-sm num">${l.dr == null ? '<span class="muted">–</span>' : esc(l.dr)}</td>
+      <td class="hide-sm">${esc(l.anchor)}</td>
+      <td class="hide-sm muted">${esc(when(l.last_checked))}</td>
+      <td>${job}</td></tr>`;
+  }).join("");
+  $("#empty").hidden = n > 0;
+  if (n && !rows.length) $("#rows").innerHTML = `<tr><td colspan="8" class="empty">No links match.</td></tr>`;
+  document.querySelectorAll("#rows tr[data-id]").forEach(tr => tr.onclick = e => { if (!e.target.closest("button")) openLink(+tr.dataset.id); });
+  document.querySelectorAll("[data-check]").forEach(b => b.onclick = () => recheck(+b.dataset.check));
+
+  $("#events").innerHTML = s.events.length ? s.events.slice(0, 25).map(e =>
+    `<div class="ev" data-id="${e.link_id}"><div><i class="sev sev-${esc(e.severity)}"></i>${esc(e.detail)}</div><div class="when">#${e.link_id} · ${esc(when(e.at))} · ${esc(e.source_url.replace(/^https?:\/\//, "").slice(0, 48))}</div></div>`).join("")
+    : `<div class="ev muted" style="cursor:default">No changes yet. Changes appear here when a re-check finds a lost link, a rel change, a noindex, or a recovery.</div>`;
+  document.querySelectorAll(".ev[data-id]").forEach(el => el.onclick = () => openLink(+el.dataset.id));
+
+  const j = s.jobs;
+  const busy = j.running !== null || j.queued.length;
+  $("#status").innerHTML = busy
+    ? `<b>Checking</b> #${j.running ?? "…"}${j.queued.length ? ` · ${j.queued.length} waiting` : ""}<div class="bar"><i></i></div>`
+    : `<span class="muted">Idle.</span> ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}<div style="margin-top:8px"><button class="btn small" id="btnAlert">Send test alert</button></div>`;
+  const ba = $("#btnAlert"); if (ba) ba.onclick = async () => { const r = await api("/api/alert-test", {}); toast(r.status.join(" · ")); };
+}
+
+async function recheck(id) {
+  await api(`/api/links/${id}/check`, {}); toast(`Link #${id} queued`);
+  const d = $("#dlgLink"); if (d.open && openId === id) d.dataset.stale = "1";
+  refresh();
+}
+
+async function openLink(id) {
+  openId = id;
+  const d = await api(`/api/links/${id}`);
+  const l = d.link, r = d.result || {}, link = r.link || {};
+  $("#dTitle").textContent = l.source_url;
+  $("#dSub").innerHTML = `#${l.id} · → ${esc(l.target)}${l.strategy ? " · " + esc(l.strategy) : ""} · ${badge(l.verdict)}`;
+  let h = "";
+  if (!r.checks) h += `<p class="muted">Not checked yet. Click <b>Re-check</b>.</p>`;
+  if (r.reasons?.length) h += `<div class="why"><b>Why ${esc(r.verdict)}</b><ul style="margin:6px 0 0;padding-left:18px">${r.reasons.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
+  if (r.notes?.length) h += `<p class="muted" style="font-size:13px">${r.notes.map(esc).join("<br>")}</p>`;
+  if (r.checks) {
+    h += `<h4>Link details</h4><div class="kv">
+      <div>Anchor text</div><div>${esc(link.anchor_text || "–")}</div>
+      <div>rel</div><div>${esc((link.rel || []).join(" ") || "none")}</div>
+      <div>Context</div><div>${esc(link.context || "–")}</div>
+      <div>Final URL</div><div style="overflow-wrap:anywhere">${esc(r.final_url || "–")}</div>
+      <div>Outbound sites</div><div>${esc(r.outbound_sites ?? "–")}</div>
+      <div>Ahrefs DR / UR</div><div>${esc(r.domain_rating ?? "not set up")}${r.url_rating != null ? " / " + esc(r.url_rating) : ""}</div>
+      <div>Last checked</div><div>${esc(when(l.last_checked))}</div>
+      <div>Next re-check</div><div>${esc(when(l.next_due))}</div></div>`;
+    h += `<h4>All 15 checks</h4><ul class="checks">${r.checks.map(c => `<li><span class="s s-${esc(c.status)}">${esc(c.status)}</span><span>${c.num}. <b>${esc(c.name)}</b>: ${esc(c.detail)}</span></li>`).join("")}</ul>`;
+  }
+  if (d.history.length) h += `<h4>History (newest first)</h4><div class="hist">${d.history.map(x => `<span class="h-${cls(x.verdict)}" title="${esc(x.at.slice(0, 16).replace("T", " "))}: ${esc(x.verdict)}"></span>`).join("")}</div>`;
+  const evs = d.events.filter(e => e.kind !== "first_check");
+  if (evs.length) h += `<h4>Changes</h4>${evs.map(e => `<div style="font-size:13px;margin:3px 0"><i class="sev sev-${esc(e.severity)}"></i>${esc(e.detail)} <span class="muted">${esc(when(e.at))}</span></div>`).join("")}`;
+  if (d.screenshot) h += `<h4>Screenshot from the last check</h4><img class="shot" alt="Screenshot of the linking page" src="/api/links/${id}/screenshot?t=${Date.now()}">`;
+  if (r.evidence_dir) h += `<p class="muted" style="font-size:12px">Evidence: ${esc(r.evidence_dir)}</p>`;
+  $("#dBody").innerHTML = h;
+  $("#dCheck").onclick = () => recheck(id);
+  $("#dDelete").onclick = async () => {
+    if (!confirmRemove(id)) return;
+    await api(`/api/links/${id}/delete`, {}); $("#dlgLink").close(); toast(`Link #${id} removed`); refresh();
+  };
+  const dlg = $("#dlgLink"); dlg.dataset.stale = "0"; if (!dlg.open) dlg.showModal();
+}
+
+function confirmRemove(id) {
+  const b = $("#dDelete");
+  if (b.dataset.armed === String(id)) { b.dataset.armed = ""; b.textContent = "Remove"; return true; }
+  b.dataset.armed = String(id); b.textContent = "Click again to remove";
+  setTimeout(() => { if (b.dataset.armed === String(id)) { b.dataset.armed = ""; b.textContent = "Remove"; } }, 4000);
+  return false;
+}
+
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => b.closest("dialog").close());
+$("#dlgLink").addEventListener("close", () => { openId = null; });
+$("#btnAdd").onclick = () => { $("#addErr").textContent = ""; $("#dlgAdd").showModal(); $("#fUrl").focus(); };
+$("#formAdd").onsubmit = async e => {
+  e.preventDefault();
+  try {
+    const r = await api("/api/links", {source_url: $("#fUrl").value, target: $("#fTarget").value, strategy: $("#fStrategy").value, notes: $("#fNotes").value, check: true});
+    $("#dlgAdd").close(); $("#fUrl").value = ""; $("#fNotes").value = "";
+    toast(r.created ? `Added link #${r.id}; checking now` : `Already in the registry as #${r.id}; checking again`);
+    refresh();
+  } catch (err) { $("#addErr").textContent = err.message; }
+};
+$("#btnDue").onclick = async () => { const r = await api("/api/check-due", {}); toast(`${r.queued} link(s) queued`); refresh(); };
+$("#btnAll").onclick = async () => { const r = await api("/api/check-all", {}); toast(`${r.queued} link(s) queued`); refresh(); };
+$("#q").oninput = render; $("#sort").onchange = render;
+
+// ---------------------------------------------------------------- opportunities
+const KIND = {unlinked_mention: "Unlinked mention", journalist: "Journalist request", gap: "Competitor gap",
+  broken_backlink: "Broken competitor link", broken_link: "Broken link on resource page", resource_page: "Resource page"};
+const STATUSES = ["new", "working", "pitched", "won", "lost", "ignored"];
+let opps = null, oppTimer = null, tab = "links";
+
+function showTab(t) {
+  tab = t;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  $("#viewLinks").hidden = t !== "links"; $("#viewOpps").hidden = t !== "opps"; $("#viewCamps").hidden = t !== "camps"; $("#viewGraph").hidden = t !== "graph";
+  $("#btnDue").hidden = $("#btnAll").hidden = $("#btnAdd").hidden = t !== "links";
+  if (t === "opps") loadOpps();
+  if (t === "camps") loadCamps();
+  if (t === "graph") loadGraph(true);
+}
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+async function loadOpps() {
+  try { opps = await api("/api/opps"); } catch (e) { return; }
+  renderOpps();
+  clearTimeout(oppTimer);
+  if (opps.finder.running.length) oppTimer = setTimeout(loadOpps, 3000);
+}
+
+function renderOpps() {
+  const o = opps, p = o.project;
+  const open = o.opps.filter(x => ["new", "working", "pitched"].includes(x.status));
+  $("#oppCount").textContent = open.length ? `(${open.length})` : "";
+  if (!p.site) {
+    $("#oppSub").innerHTML = "Set <b>site</b>, <b>brand_names</b>, <b>competitors</b> and <b>topics</b> under [project] in config.toml, then restart the dashboard.";
+  } else {
+    const src = [p.alerts_feeds ? `${p.alerts_feeds} Google Alerts feed(s)` : "no Google Alerts feeds", p.dataforseo ? "DataForSEO on" : "DataForSEO off", p.imap ? "inbox on" : "inbox off", p.bluesky ? "Bluesky on" : ""].filter(Boolean);
+    $("#oppSub").textContent = `${p.site} · ${p.competitors.length} competitor(s) · ${p.topics.length} topic(s) · ${src.join(" · ")} · DataForSEO spend this month $${o.spent.toFixed(2)} of $${o.budget.toFixed(2)}`;
+  }
+  const f = o.finder;
+  if (f.running.length) $("#finderState").innerHTML = `<b>Finding:</b> ${esc(f.running.join(", "))}… this can take a few minutes.`;
+  else if (f.last.length) $("#finderState").innerHTML = f.last.map(r => `${esc(r.name)}: ${r.new} new of ${r.found}${r.registered ? `, ${r.registered} already linking (added to Links)` : ""}${r.errors.length ? ` <span class="err" style="display:inline">· ${esc(r.errors[0])}</span>` : ""}`).join("<br>");
+  else $("#finderState").innerHTML = `<span class="muted">Last runs: ${Object.entries(o.last_runs).map(([k, v]) => `${esc(k)} ${esc(v ? when(v) : "never")}`).join(" · ")}</span>`;
+  $("#btnFind").disabled = !!f.running.length;
+
+  const q = $("#oq").value.trim().toLowerCase(), kind = $("#okind").value, st = $("#ostatus").value;
+  let rows = o.opps.filter(x => (!kind || x.kind === kind) && (st === "" || (st === "open" ? ["new", "working", "pitched"].includes(x.status) : x.status === st)));
+  if (q) rows = rows.filter(x => [x.title, x.site, x.url, x.notes].join(" ").toLowerCase().includes(q));
+  const sc = s => s >= 60 ? "sc-hi" : s >= 40 ? "sc-mid" : "sc-lo";
+  $("#orows").innerHTML = rows.map(x => `<tr data-id="${x.id}">
+    <td><span class="score ${sc(x.score)}">${x.score}</span></td>
+    <td class="url"><div class="u">${esc(x.title || x.site)}</div><div class="t">${esc(x.url.startsWith("email:") ? (x.data.source || "email") : x.url)}</div></td>
+    <td class="hide-sm kind">${esc(KIND[x.kind] || x.kind)}</td>
+    <td><select class="st" data-st="${x.id}">${STATUSES.map(s => `<option${s === x.status ? " selected" : ""}>${s}</option>`).join("")}</select></td>
+    <td class="hide-sm muted">${esc(when(x.found_at))}</td></tr>`).join("");
+  const empty = $("#oempty");
+  empty.hidden = rows.length > 0;
+  empty.innerHTML = o.opps.length ? "No opportunities match." : "No opportunities yet. Click <b>Find now</b>.";
+  document.querySelectorAll("#orows tr").forEach(tr => tr.onclick = e => { if (!e.target.closest("select")) openOpp(+tr.dataset.id); });
+  document.querySelectorAll("[data-st]").forEach(s => s.onchange = async () => {
+    if (s.value === "won") { openOpp(+s.dataset.st, true); return; }
+    await api(`/api/opps/${s.dataset.st}`, {status: s.value}); toast(`Marked ${s.value}`); loadOpps();
+  });
+  $("#platformPanel").hidden = !o.platforms.length;
+  $("#prows").innerHTML = o.platforms.map(pl => `<tr><td>${esc(pl.site)}<div class="t muted" style="font-size:12px">${esc(pl.url)}</div></td><td>${esc(pl.verdict)}</td><td class="hide-sm muted">${esc(when(pl.tested_at))}</td></tr>`).join("");
+}
+
+function openOpp(id, won = false) {
+  const x = opps.opps.find(o => o.id === id); if (!x) return;
+  const d = x.data;
+  $("#oTitle").textContent = x.title || x.site;
+  $("#oSub").innerHTML = `#${x.id} · ${esc(KIND[x.kind] || x.kind)} · score ${x.score} · ${esc(x.status)}`;
+  const row = (k, v) => v ? `<div>${k}</div><div style="overflow-wrap:anywhere">${v}</div>` : "";
+  const link = u => u ? `<a href="${esc(u)}" target="_blank" rel="noreferrer">${esc(u)}</a>` : "";
+  let h = d.how ? `<div class="why">${esc(d.how)}</div>` : "";
+  if (x.kind === "journalist") h += `<div class="why">Answer only if you have real expertise on this. Reply directly to the journalist, with a short, specific quote.</div>`;
+  h += `<h4>Details</h4><div class="kv">
+    ${row("Page", x.url.startsWith("email:") ? "" : link(x.url))}
+    ${row("Site", esc(x.site))}
+    ${row("Strength", d.strength != null ? `${esc(d.strength)} (${esc(d.strength_source)}${d.ahrefs_dr != null ? `: DR ${esc(d.ahrefs_dr)}` : ""}${d.ahrefs_ur != null ? `, UR ${esc(d.ahrefs_ur)}` : ""})` : "unknown")}
+    ${row("Brand", esc(d.brand))}${row("Context", esc(d.context))}
+    ${row("Dead link", link(d.dead_url))}${row("Dead because", esc(d.dead_status))}${row("Anchor", esc(d.anchor))}
+    ${row("Old copy", link(d.wayback))}${row("Offer your page", link(d.suggested_page))}
+    ${row("Competitors", esc((d.competitors || []).join(", ")))}${row("Competitor", esc(d.competitor))}
+    ${row("From", esc(d.source))}${row("Outlet", esc(d.outlet))}${row("Deadline", esc(d.deadline))}
+    ${row("Contacts", (d.contacts || []).map(c => `<a href="mailto:${esc(c)}">${esc(c)}</a>`).join(", "))}
+    ${row("Campaign", esc(d.campaign))}${row("Search", esc(d.query))}${row("Broken links on page", d.broken_links != null ? `${d.broken_links} of ${d.links_checked} checked` : "")}
+    <div>Score</div><div class="muted">${esc(x.score_detail)}</div></div>`;
+  if (d.request) h += `<h4>Request</h4><pre class="req">${esc(d.request)}</pre>`;
+  h += `<h4>Draft</h4><div class="draft" id="oDraft"><span class="muted" style="font-size:13px">Loading…</span></div>`;
+  h += `<h4>Notes</h4><textarea id="oNotes" placeholder="Who you contacted, when, what you offered">${esc(x.notes)}</textarea>
+    <div class="foot" style="justify-content:space-between;flex-wrap:wrap">
+      <div class="actions">${STATUSES.filter(s => s !== "won").map(s => `<button class="btn small" data-set="${s}"${s === x.status ? " disabled" : ""}>${s}</button>`).join("")}</div>
+      <button class="btn small" id="oSave">Save notes</button></div>
+    <h4>Won it?</h4><div class="row2" style="align-items:end"><div><label for="oWonUrl" style="margin-top:0">Page where your link now is</label>
+      <input id="oWonUrl" value="${esc(x.url.startsWith("email:") ? "" : x.url)}" placeholder="https://..."></div>
+      <div><button class="btn primary" id="oWon">Mark won and verify link</button></div></div><div class="err" id="oErr"></div>`;
+  $("#oBody").innerHTML = h;
+  document.querySelectorAll("[data-set]").forEach(b => b.onclick = async () => { await api(`/api/opps/${id}`, {status: b.dataset.set}); toast(`Marked ${b.dataset.set}`); $("#dlgOpp").close(); loadOpps(); });
+  $("#oSave").onclick = async () => { await api(`/api/opps/${id}`, {notes: $("#oNotes").value}); toast("Notes saved"); loadOpps(); };
+  $("#oWon").onclick = async () => {
+    try { const r = await api(`/api/opps/${id}/won`, {link_url: $("#oWonUrl").value}); toast(`Added as link #${r.link_id}; checking it now`); $("#dlgOpp").close(); loadOpps(); refresh(); }
+    catch (e) { $("#oErr").textContent = e.message; }
+  };
+  const dlg = $("#dlgOpp"); if (!dlg.open) dlg.showModal();
+  if (won) $("#oWonUrl").focus();
+  loadDraft(id);
+}
+
+// ---------------------------------------------------------------- drafts (never sent from here)
+let draftAI = false;
+async function loadDraft(id) {
+  try { const r = await api(`/api/opps/${id}/draft`); draftAI = r.ai; renderDraft(id, r.draft); }
+  catch (e) { $("#oDraft").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+function draftButtons(hasDraft) {
+  return `<button class="btn small${hasDraft ? "" : " primary"}" id="dMake">${hasDraft ? "Redo draft" : "Write draft"}</button>` +
+    (draftAI ? `<button class="btn small" id="dMakeAI">${hasDraft ? "Redo with AI" : "Write with AI"}</button>` : "");
+}
+function renderDraft(id, d) {
+  const box = $("#oDraft"); if (!box) return;
+  if (!d) {
+    box.innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:8px">Writes an honest first draft from your [profile] and what was found on the page, and looks up public contact details. Nothing is sent.${draftAI ? "" : " Add an Anthropic API key under [drafting] to personalise drafts with AI."}</div><div class="actions">${draftButtons(false)}</div><div class="err" id="dErr"></div>`;
+  } else {
+    const c = d.contacts || {}, emails = c.emails || [];
+    const to = emails.length > 1 ? `<select id="dTo" class="st" style="width:100%">${emails.map(e => `<option>${esc(e)}</option>`).join("")}</select>`
+      : `<input id="dTo" value="${esc(d.to)}" placeholder="No public email found: check the contact page">`;
+    box.innerHTML = `<div class="muted" style="font-size:12px">${d.source === "ai" ? "Personalised with AI" : d.source === "edited" ? "Your edited version" : "Template"}${d.created_at ? " · " + esc(when(d.created_at)) : ""}${c.author ? " · author: " + esc(c.author) : ""}${(c.contact_pages || []).length ? " · contact page: " + c.contact_pages.slice(0, 2).map(u => `<a href="${esc(u)}" target="_blank" rel="noreferrer">${esc(u.replace(/^https?:\/\//, ""))}</a>`).join(", ") : ""}</div>
+      <label for="dTo">To</label>${to}
+      <label for="dSubject">Subject</label><input id="dSubject" value="${esc(d.subject)}">
+      <label for="dBody">Message</label><textarea id="dBody">${esc(d.body)}</textarea>
+      <div id="dPh"></div>
+      ${(d.tips || []).length ? `<ul class="why" style="margin:8px 0 0;padding-left:28px">${d.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
+      ${(d.notes || []).map(n => `<div class="err">${esc(n)}</div>`).join("")}
+      <div class="foot" style="justify-content:space-between;flex-wrap:wrap">
+        <div class="actions">${draftButtons(true)}</div>
+        <div class="actions"><button class="btn small" id="dSave">Save edits</button><button class="btn small" id="dCopy">Copy</button><button class="btn small primary" id="dMail">Open in email app</button></div>
+      </div><div class="err" id="dErr"></div>`;
+    const ph = () => {
+      const found = [...new Set((($("#dSubject").value + "\n" + $("#dBody").value).match(/\[[A-Z][A-Z0-9 ,.'\/&:;()?!\-–—]{2,}\]/g) || []))];
+      $("#dPh").innerHTML = found.length ? `<div class="ph">Fill in or delete before sending: ${found.map(esc).join(", ")}</div>` : "";
+    };
+    ph(); $("#dBody").oninput = ph; $("#dSubject").oninput = ph;
+    $("#dSave").onclick = async () => {
+      try { const r = await api(`/api/opps/${id}/draft/save`, {subject: $("#dSubject").value, body: $("#dBody").value}); toast("Draft saved"); renderDraft(id, r.draft); }
+      catch (e) { $("#dErr").textContent = e.message; }
+    };
+    $("#dCopy").onclick = async () => {
+      const text = `Subject: ${$("#dSubject").value}\n\n${$("#dBody").value}`;
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); }
+      toast("Copied");
+    };
+    $("#dMail").onclick = () => {
+      const url = `mailto:${encodeURIComponent($("#dTo").value.trim()).replace(/%40/g, "@")}?subject=${encodeURIComponent($("#dSubject").value)}&body=${encodeURIComponent($("#dBody").value)}`;
+      window.location.href = url;
+    };
+  }
+  const make = async ai => {
+    const btns = box.querySelectorAll("#dMake,#dMakeAI"); btns.forEach(b => b.disabled = true);
+    const err = $("#dErr"); if (err) err.textContent = "";
+    const b = $(ai ? "#dMakeAI" : "#dMake"); if (b) b.textContent = "Writing… (looking up contacts)";
+    try { const r = await api(`/api/opps/${id}/draft`, {ai}); renderDraft(id, r.draft); }
+    catch (e) { btns.forEach(b => b.disabled = false); if ($("#dErr")) $("#dErr").textContent = e.message; }
+  };
+  $("#dMake").onclick = () => make(false);
+  if ($("#dMakeAI")) $("#dMakeAI").onclick = () => make(true);
+}
+
+// ---------------------------------------------------------------- site graph
+let graphTimer = null, graphWasRunning = false;
+async function loadGraph(reloadFrame) {
+  let g; try { g = await api("/api/graph"); } catch (e) { return; }
+  const running = g.finder.running.includes("sitegraph");
+  const s = g.summary || {};
+  $("#graphSub").textContent = !g.site ? "Set site under [project] in config.toml first."
+    : g.exists ? `${g.site} · mapped ${when(g.crawled_at)} · ${s.pages} pages · ${s.internal_links} internal links · ${g.issues.filter(i => i.severity === "high" || i.severity === "medium").length} issue(s) to fix`
+    : `${g.site} · not mapped yet. Click Map my site: it reads every page of your site (about 1 per second) and draws how they link.`;
+  $("#graphState").innerHTML = running ? "<b>Mapping your site…</b> this takes about a second per page." : "";
+  $("#btnGraph").disabled = running || !g.site;
+  $("#graphOpen").hidden = !g.exists;
+  if ((reloadFrame || (graphWasRunning && !running)) && g.exists) $("#graphFrame").src = "/graph?t=" + Date.now();
+  if (!g.exists) $("#graphFrame").removeAttribute("src");
+  graphWasRunning = running;
+  clearTimeout(graphTimer); if (running) graphTimer = setTimeout(() => loadGraph(false), 3000);
+}
+$("#btnGraph").onclick = async () => { try { await api("/api/graph", {}); toast("Mapping your site…"); loadGraph(false); } catch (e) { toast(e.message); } };
+
+// ---------------------------------------------------------------- campaigns
+let camps = null, campTimer = null;
+async function loadCamps() {
+  try { camps = await api("/api/campaigns"); } catch (e) { return; }
+  renderCamps();
+  clearTimeout(campTimer);
+  if (camps.finder.running.length) campTimer = setTimeout(loadCamps, 3000);
+}
+function renderCamps() {
+  const c = camps;
+  $("#campSub").textContent = `Every week the monitor looks for new pages that link to the study, and for pages that write about it without a link, for ${c.active_days} days after launch.` +
+    (c.dataforseo ? "" : " Needs a DataForSEO login in config.toml to search.");
+  const f = c.finder;
+  $("#campState").innerHTML = f.running.length ? `<b>Checking campaigns…</b> this can take a few minutes.`
+    : f.last.length && f.last[0].name === "campaigns" ? f.last.map(r => `Last check: ${r.registered} new linking page(s), ${r.new} new unlinked mention(s)${r.errors.length ? ` <span class="err" style="display:inline">· ${esc(r.errors[0])}</span>` : ""}`).join("<br>") : "";
+  $("#campList").innerHTML = c.campaigns.length ? c.campaigns.map(k => {
+    const s = k.stats;
+    const rows = k.pickups.map(p => `<tr><td class="muted">${esc(p.found_at.slice(0, 10))}</td>
+      <td class="url"><div class="u"><a href="${esc(p.url)}" target="_blank" rel="noreferrer">${esc(p.title || p.url)}</a></div><div class="t">${esc(p.site)} · ${esc(p.source)}</div></td>
+      <td>${p.kind === "linked" ? (p.link_id ? `<a href="#" data-link="${p.link_id}">${badge(p.verdict)}</a>` : badge(p.verdict)) : `<a href="#" data-opp="${p.opp_id}"><span class="pill">no link yet: ask</span></a>`}</td></tr>`).join("");
+    return `<div class="panel camp">
+      <div class="camp-head"><div><h3>${esc(k.name)} <span class="pill">${k.active ? "active" : "ended"}</span></h3>
+        <div class="t muted" style="font-size:13px"><a href="${esc(k.asset_url)}" target="_blank" rel="noreferrer">${esc(k.asset_url)}</a> · launched ${esc(k.started_at.slice(0, 10))} · checked ${esc(when(k.last_checked))}</div>
+        ${k.phrases.length ? `<div class="muted" style="font-size:12px;margin-top:4px">Phrases: ${k.phrases.map(esc).join(" · ")}</div>` : ""}</div>
+        <div class="actions"><button class="btn small primary" data-ccheck="${k.id}"${f.running.length ? " disabled" : ""}>Check now</button><button class="btn small" data-cdel="${k.id}">Remove</button></div></div>
+      <div class="stats"><div><b>${s.linked}</b>linking pages</div><div><b>${s.counts}</b>counting</div><div><b>${s.mentions}</b>mentions without a link</div><div><b>${s.sites}</b>sites</div></div>
+      ${rows ? `<table><thead><tr><th>Found</th><th>Page</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">No pickups yet.</div>`}
+    </div>`;
+  }).join("") : `<div class="panel empty">No campaigns yet. Publish a study, then add it above.</div>`;
+  document.querySelectorAll("[data-ccheck]").forEach(b => b.onclick = async () => {
+    try { const r = await api(`/api/campaigns/${b.dataset.ccheck}/check`, {}); toast(r.started ? "Checking…" : "Already running"); loadCamps(); } catch (e) { toast(e.message); }
+  });
+  document.querySelectorAll("[data-cdel]").forEach(b => b.onclick = async () => {
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Click again to remove"; return; }
+    await api(`/api/campaigns/${b.dataset.cdel}/delete`, {}); toast("Campaign removed; its links stay in Links"); loadCamps();
+  });
+  document.querySelectorAll("[data-link]").forEach(a => a.onclick = e => { e.preventDefault(); openLink(+a.dataset.link); });
+  document.querySelectorAll("[data-opp]").forEach(a => a.onclick = async e => { e.preventDefault(); opps = await api("/api/opps"); openOpp(+a.dataset.opp); });
+}
+$("#formCamp").onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await api("/api/campaigns", {name: $("#cName").value, asset_url: $("#cAsset").value, phrases: $("#cPhrases").value, started_at: $("#cStart").value});
+    $("#formCamp").reset(); $("#campErr").textContent = ""; toast("Campaign added"); loadCamps();
+  } catch (e) { $("#campErr").textContent = e.message; }
+};
+$("#dlgOpp").addEventListener("close", () => { if (tab === "opps") renderOpps(); });
+$("#btnFind").onclick = async () => {
+  try { const r = await api("/api/find", {which: $("#findWhich").value}); toast(r.started ? "Finding opportunities…" : "Already running"); loadOpps(); }
+  catch (e) { toast(e.message); }
+};
+$("#oq").oninput = renderOpps; $("#okind").onchange = renderOpps; $("#ostatus").onchange = renderOpps;
+refresh();
+api("/api/opps").then(o => { opps = o; renderOpps(); }).catch(() => {});
+</script>
+</body>
+</html>

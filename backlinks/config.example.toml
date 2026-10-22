@@ -1,0 +1,128 @@
+# Backlink Verifier settings. Copy to config.toml (the `init` command does it for you).
+# Everything works for free: no API keys, no subscriptions, no email. The paid services and
+# email/Telegram sections further down are optional extras; leave them empty.
+
+[general]
+data_dir = "data"              # database, evidence and snapshots live here
+user_agent = "Mozilla/5.0 (compatible; BacklinkVerifier/0.4; personal link checker)"
+timeout_seconds = 20
+delay_seconds = 1.0            # wait at least this long between requests to one site
+max_outbound_domains = 100     # a page linking to more sites than this makes your link "Weak"
+render = true                  # headless browser checks (needs Playwright + Chromium)
+render_timeout_seconds = 30
+save_evidence = true           # keep HTML, headers, screenshot and result for every check
+recheck_days = 7               # `check --due` re-checks links older than this
+
+[project]
+# Used by the opportunity finders (`linkverify find ...`). Fill these in first.
+site = ""                      # your site, e.g. "example.com"
+brand_names = []               # how people write your brand, e.g. ["Example", "Example App"]
+competitors = []               # 2-6 competitor sites, e.g. ["rival1.com", "rival2.com"]
+topics = []                    # 3-8 short topics you can speak on, e.g. ["car rental", "road trips"]
+pages = []                     # your best pages to offer as replacements, e.g. ["https://example.com/guide"]
+
+[finder]
+# Free mention source: create alerts at https://www.google.com/alerts for your brand name,
+# choose "Deliver to: RSS feed", then paste each feed URL here.
+google_alerts_feeds = []
+serp_mention_search = true     # optional: also search Google via DataForSEO (paid; ignored without a login)
+max_serp_queries_per_run = 10  # caps DataForSEO searches per run
+max_pages_fetched_per_run = 60 # caps pages fetched to verify opportunities
+max_links_checked_per_page = 80
+gap_min_competitors = 2
+gap_limit = 200                # referring domains per competitor pair
+broken_limit = 200             # broken backlinks per competitor
+resource_footprints = ['"useful resources"', 'intitle:resources', 'inurl:links', '"recommended tools"', '"further reading"']
+auto_register_linked_mentions = true   # pages that already link to you go straight into your registry
+daily_finders = ["mentions", "journalists"]   # run by the daily monitor
+weekly_finders = ["listings", "partners", "gap", "broken", "resources", "campaigns"]  # gap/broken/resources only run with DataForSEO
+alert_min_score = 60           # alert on new opportunities scoring at least this
+
+[profile]
+# Used in outreach drafts and journalist answers. Drafts only ever use what is written here;
+# anything missing is left as a [PLACEHOLDER] for you to fill in.
+name = ""                      # e.g. "Alex Taylor"
+title = ""                     # e.g. "Founder"
+company = ""                   # e.g. "Taylor Motors"
+email = ""
+bio = ""                       # one line, e.g. "Runs a car rental company in Lahore since 2015."
+facts = []                     # true things you can say, e.g. ["We rent 40 cars", "10 years in car rental"]
+
+[drafting]
+# Optional: personalise drafts with Claude. Create a key at https://console.anthropic.com
+# Each draft is one short API call. The AI is told to use only your [profile] facts.
+anthropic_api_key = ""
+model = "claude-sonnet-5-5"
+
+[campaigns]
+# Data studies / PR campaigns you add with `linkverify campaign add` or the Campaigns tab
+# are checked weekly for this many days after launch.
+active_days = 180
+
+[journalist]
+# Reads journalist-request emails (Source of Sources, Help a B2B Writer, Qwoted, Featured...)
+# from your inbox, read-only. For Gmail: imap_host "imap.gmail.com", your address, and an App Password.
+imap_host = ""
+imap_port = 993
+username = ""
+password = ""
+folder = "INBOX"
+senders = ["sourceofsources", "helpab2bwriter", "mentionmatch", "qwoted", "featured.com", "sourcebottle", "helpareporter"]
+days_back = 3
+bluesky_search = true          # free: searches Bluesky for #journorequest posts on your topics
+bluesky_hashtags = ["#journorequest"]
+mastodon_search = true         # free: reads public #journorequest posts on these Mastodon servers
+mastodon_instances = ["journa.host", "mastodon.social"]
+
+[free]
+tranco = true                  # free site strength from the Tranco top-million list (downloaded monthly, ~10 MB)
+
+[monitor]
+# `linkverify monitor` (run daily by the scheduled task) re-checks a link:
+weekly_days = 7                # every 7 days while the link is new...
+intensive_period_days = 90     # ...for its first 90 days,
+monthly_days = 30              # then every 30 days.
+alert_on = "changes"           # "changes" = problems and recoveries; "bad" = problems only
+desktop_notifications = true   # free Windows pop-up after the daily run when something needs you
+
+[email]
+# Alerts by email. For Gmail: smtp.gmail.com, port 587, your address as username,
+# and an App Password (Google Account > Security > App passwords), not your normal password.
+smtp_host = ""
+smtp_port = 587
+username = ""
+password = ""
+from = ""                      # defaults to username
+to = ""                        # where alerts go
+
+[telegram]
+# Alerts by Telegram. Create a bot with @BotFather to get the token, send your bot a
+# message, then open https://api.telegram.org/bot<TOKEN>/getUpdates to find your chat id.
+bot_token = ""
+chat_id = ""
+
+[dashboard]
+port = 8787                    # the dashboard opens at http://127.0.0.1:8787
+
+[ahrefs]
+# Real Ahrefs Domain Rating (DR) of each site and URL Rating (UR) of each page, used in
+# check 13 and in opportunity scores. Needs an Ahrefs plan with API access.
+# Create a key at https://app.ahrefs.com/api/keys
+api_key = ""
+cache_days = 30                # ratings are kept this long, so each site is paid for once a month
+
+[dataforseo]
+# "Is the linking page seen in Google?" (check 14). Pay as you go; top-ups from $50.
+# Login and password are under API Access in your DataForSEO dashboard.
+login = ""
+password = ""
+location_code = 2840           # 2840 = United States; 2586 = Pakistan
+language_code = "en"
+monthly_budget_usd = 10        # the tool stops calling DataForSEO when this month's spend reaches this
+
+[search_console]
+# Optional: checks that YOUR target page is indexed (check 11). Free.
+# Needs a Google Cloud service account added as a user on your Search Console property,
+# and: pip install google-auth
+service_account_file = ""      # e.g. "service-account.json"
+property = ""                  # e.g. "sc-domain:example.com" or "https://example.com/"
