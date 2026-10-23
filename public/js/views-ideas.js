@@ -87,10 +87,10 @@ VIEWS.links = async (ctx) => {
   const rows = await api(`/api/audits/${ctx.auditData.audit.id}/link-opportunities`);
   const base = ctx.project.start_url;
   const head = h("div", { class: "card" }, h("h2", {}, "Internal link ideas"),
-    h("p", { class: "hint", style: { margin: 0 } }, "Pages with the fewest internal links, and other pages that already mention their topic but don't link to them. Turn the quoted words into a link: it helps Google and AI find and understand the weaker page."));
+    h("p", { class: "hint", style: { margin: 0 } }, "Pages with the fewest links from other pages’ text (menu and footer links don’t count), and other pages that already mention their topic but don't link to them. Turn the quoted words into a link: it helps Google and AI find and understand the weaker page."));
   if (!rows.length) return [...page2, head, h("div", { class: "card empty" }, "No suggestions — either every page is well linked, or this audit was made before link ideas existed (run a new audit).")];
   return [...page2, head, ...rows.map((t) => h("div", { class: "card" },
-    h("div", { class: "card-h" }, h("h3", {}, shortUrl(t.target, base)), h("span", { class: "small muted" }, `${t.inlinks} internal link${t.inlinks === 1 ? "" : "s"} now`)),
+    h("div", { class: "card-h" }, h("h3", {}, shortUrl(t.target, base)), h("span", { class: "small muted" }, t.textInlinks === null || t.textInlinks === undefined ? `${t.inlinks} internal link${t.inlinks === 1 ? "" : "s"} now` : `${t.textInlinks} link${t.textInlinks === 1 ? "" : "s"} from other pages’ text now (menus not counted)`)),
     h("p", { class: "small muted", style: { marginTop: 0 } }, t.title),
     table([{ label: "Add a link on", cls: "url", get: (s) => shortUrl(s.from, base) }, { label: "Anchor text", get: (s) => h("b", {}, s.anchor) },
       { label: "Where", get: (s) => h("span", { class: "small muted" }, s.context) }], t.suggestions)))];

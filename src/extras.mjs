@@ -78,42 +78,83 @@ export function localSource(auditId, url) {
   return { configured: true, file, vscode: vscode(null), hits: hits.map((h) => ({ ...h, vscode: vscode(h.line) })) };
 }
 
-/** I4: for pages with few internal links, find other pages that already mention their topic. */
+/** I4: pages with the fewest links from other pages' text, and other pages that mention their topic without linking.
+ *  Only text links count (menu and footer links are on every page and say little about the target). A suggestion is
+ *  left out when its words are already a link on that page, or when another service page's title has the same words:
+ *  pointing those words here would send that page's own keyword to a competing page. */
 const STOP = new Set(("a an and are as at be by for from how in is it its of on or our the to us we what when where who why will with you your vs near best top service services " +
-  "long does do did can get getting ready much many need needs should things know make keep take takes after before more most").split(" "));
+  "long does do did can get getting ready much many need needs should things know make keep take takes after before more most not").split(" "));
 export function linkOpportunities(auditId, maxTargets = 25) {
   const a = audit(auditId);
   const p = get("SELECT name, start_url FROM projects WHERE id=?", a.project_id);
   const brand = new Set(p.name.toLowerCase().split(/\W+/).filter(Boolean));
   const pages = all("SELECT url, final_url, title, h1, inlinks FROM pages WHERE audit_id=? AND indexable=1 AND status=200", a.id);
   if (pages.length < 3) return [];
-  const sorted = pages.map((x) => x.inlinks).sort((x, y) => x - y);
+  const key = (u) => (u || "").replace(/\/$/, "");
+  const links = all("SELECT from_url, to_url, anchor, placement FROM links WHERE audit_id=? AND kind='a' AND internal=1", a.id);
+  const placed = links.some((l) => l.placement); // audits before placement existed: every link counts as a text link
+  const text = links.filter((l) => !placed || l.placement === "content");
+  const into = new Map(), anchorsOn = new Map(), linked = new Set();
+  for (const l of text) {
+    const f = key(l.from_url), t = key(l.to_url);
+    linked.add(f + "\u0000" + t);
+    if (l.anchor && l.anchor.length >= 4) { if (!anchorsOn.has(f)) anchorsOn.set(f, []); anchorsOn.get(f).push(l.anchor.toLowerCase()); }
+    if (f !== t) { if (!into.has(t)) into.set(t, new Set()); into.get(t).add(f); }
+  }
+  const textIn = (x) => new Set([...(into.get(key(x.url)) || []), ...(into.get(key(x.final_url)) || [])]).size;
+  const scored = pages.map((x) => ({ ...x, textIn: textIn(x) }));
+  const sorted = scored.map((x) => x.textIn).sort((x, y) => x - y);
   const weakMax = Math.max(3, sorted[Math.floor(sorted.length / 4)]);
   const texts = new Map(all("SELECT url, text FROM page_text WHERE audit_id=?", a.id).map((r) => [r.url, r.text.toLowerCase()]));
-  const linked = new Set(all("SELECT DISTINCT from_url || char(0) || to_url k FROM links WHERE audit_id=? AND kind='a' AND internal=1 AND (placement IS NULL OR placement='content')", a.id).map((r) => r.k)); // a menu link is not a contextual link
+  const topicOf = (x) => (x.h1 || x.title || "").toLowerCase().split(/\s[|–-]\s/)[0].replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ").trim();
+  const isBlog = (u) => /\/blog\/[^/]+/.test(u);
+  const ownerWords = scored.filter((x) => !isBlog(x.final_url || x.url)).map((x) => ({ url: key(x.final_url || x.url), words: new Set(normWords(x.title)) }));
   const out = [];
-  for (const t of pages.filter((x) => x.inlinks <= weakMax).sort((x, y) => x.inlinks - y.inlinks).slice(0, maxTargets)) {
-    const topic = (t.h1 || t.title || "").toLowerCase().split(/\s[|–-]\s/)[0].replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ").trim();
-    const words = topic.split(" ").filter((w) => w.length > 2 && !STOP.has(w) && !brand.has(w));
+  // The home page is linked from every logo and menu and its keyword is the site's own: not a target.
+  const home = key(p.start_url);
+  for (const t of scored.filter((x) => x.textIn <= weakMax && key(x.final_url || x.url) !== home && key(x.url) !== home).sort((x, y) => x.textIn - y.textIn).slice(0, maxTargets)) {
+    const tgt = key(t.final_url || t.url);
+    // Contractions and short words ("you're not") are not a topic.
+    const words = topicOf(t).split(" ").filter((w) => w.length > 2 && !STOP.has(w) && !brand.has(w) && !w.includes("'"));
     const phrases = new Set();
-    for (let n = Math.min(4, words.length); n >= 2; n--) for (let i = 0; i + n <= words.length; i++) phrases.add(words.slice(i, i + n).join(" "));
+    for (let n = Math.min(4, words.length); n >= 2; n--) for (let i = 0; i + n <= words.length; i++) {
+      const ph = words.slice(i, i + n);
+      if (!ph.some((w) => w.length >= 4)) continue;
+      const stems = normWords(ph.join(" "));
+      if (ownerWords.some((o) => o.url !== tgt && o.url !== key(t.url) && stems.every((w) => o.words.has(w)))) continue; // another page's keyword
+      phrases.add(ph.join(" "));
+    }
     if (!phrases.size) continue;
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const ordered = [...phrases].sort((x, y) => y.length - x.length);
     const sources = [];
-    for (const s of pages) {
-      const src = s.final_url || s.url, tgt = t.final_url || t.url;
-      if (src === tgt || linked.has(src + "\u0000" + tgt) || linked.has(src + "\u0000" + t.url)) continue;
-      const text = texts.get(src); if (!text) continue;
-      const phrase = ordered.find((ph) => text.includes(ph));
-      if (!phrase) continue;
-      const i = text.indexOf(phrase);
-      sources.push({ from: src, anchor: phrase, context: "…" + text.slice(Math.max(0, i - 70), i + phrase.length + 70).trim() + "…", fromInlinks: s.inlinks, words: phrase.split(" ").length });
+    for (const s of scored) {
+      const src = key(s.final_url || s.url);
+      if (src === tgt || src === key(t.url) || linked.has(src + "\u0000" + tgt) || linked.has(src + "\u0000" + key(t.url))) continue;
+      const body = texts.get(s.final_url || s.url) || texts.get(s.url); if (!body) continue;
+      // Where this page's existing text links sit: a new link must not overlap one ("the [roadworthy certificate] checklist").
+      const taken = [];
+      for (const an of anchorsOn.get(src) || []) for (const m of body.matchAll(new RegExp(esc(an), "g"))) taken.push([m.index, m.index + an.length]);
+      const srcWords = new Set(normWords(s.title));
+      let hit = null;
+      for (const ph of ordered) {
+        if (normWords(ph).every((w) => srcWords.has(w))) continue; // the source's own keyword stays on the source
+        // Whole words only: "car check" is not in "car checked".
+        for (const m of body.matchAll(new RegExp(`(?<![a-z0-9])${esc(ph)}(?![a-z0-9])`, "g")))
+          if (!taken.some(([b, e]) => m.index < e && m.index + ph.length > b)) { hit = [ph, m.index]; break; }
+        if (hit) break;
+      }
+      if (!hit) continue;
+      const [phrase, i] = hit;
+      sources.push({ from: s.final_url || s.url, anchor: phrase, context: "…" + body.slice(Math.max(0, i - 70), i + phrase.length + 70).trim() + "…", fromInlinks: s.textIn, words: phrase.split(" ").length });
     }
     sources.sort((x, y) => y.words - x.words || y.fromInlinks - x.fromInlinks);
-    if (sources.length) out.push({ target: t.final_url || t.url, title: t.h1 || t.title, inlinks: t.inlinks, suggestions: sources.slice(0, 5) });
+    if (sources.length) out.push({ target: t.final_url || t.url, title: t.h1 || t.title, inlinks: t.inlinks, textInlinks: placed ? t.textIn : null, suggestions: sources.slice(0, 5) });
   }
   return out;
 }
+const normWords = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter((w) => w && !STOP.has(w))
+  .map((w) => (w.length > 4 ? w.replace(/(ings|ing|es|e|s)$/, "") : w));
 
 /** I8: ask the owner's local Claude Code for a concrete fix. No tools, no MCP: it can only answer in text. */
 const asking = new Set();
