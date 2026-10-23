@@ -90,7 +90,7 @@ export function linkOpportunities(auditId, maxTargets = 25) {
   const sorted = pages.map((x) => x.inlinks).sort((x, y) => x - y);
   const weakMax = Math.max(3, sorted[Math.floor(sorted.length / 4)]);
   const texts = new Map(all("SELECT url, text FROM page_text WHERE audit_id=?", a.id).map((r) => [r.url, r.text.toLowerCase()]));
-  const linked = new Set(all("SELECT DISTINCT from_url || char(0) || to_url k FROM links WHERE audit_id=? AND kind='a' AND internal=1", a.id).map((r) => r.k));
+  const linked = new Set(all("SELECT DISTINCT from_url || char(0) || to_url k FROM links WHERE audit_id=? AND kind='a' AND internal=1 AND (placement IS NULL OR placement='content')", a.id).map((r) => r.k)); // a menu link is not a contextual link
   const out = [];
   for (const t of pages.filter((x) => x.inlinks <= weakMax).sort((x, y) => x.inlinks - y.inlinks).slice(0, maxTargets)) {
     const topic = (t.h1 || t.title || "").toLowerCase().split(/\s[|–-]\s/)[0].replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ").trim();

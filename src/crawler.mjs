@@ -140,13 +140,17 @@ export function parseHtml(html, url) {
     // Language versions of one page: their shared text/titles are not duplicates (see site rules).
     d.hreflangAlts = [...new Set(hl.map((_, e) => normalize($(e).attr("href"), url)).get().filter(Boolean))].slice(0, 60);
   }
-  // links
+  // links. placement: "content" = in the page's own text; "nav" = template (menus, header, footer, breadcrumbs, or
+  // anything outside <main> when the page has one). A menu link on every page says little about its target, so
+  // contextual-link checks must not count it.
   const links = [];
+  const hasMain = $("main").length > 0;
   $("a[href]").each((_, a) => {
     const href = $(a).attr("href");
     if (!href || /^(mailto|tel|javascript|sms|#)/i.test(href.trim())) return;
     const to = normalize(href, url);
-    if (to) links.push({ to, anchor: $(a).text().replace(/\s+/g, " ").trim().slice(0, 120), nofollow: /nofollow/i.test($(a).attr("rel") || "") });
+    const template = (hasMain && !$(a).closest("main").length) || $(a).closest("header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]").length > 0;
+    if (to) links.push({ to, anchor: $(a).text().replace(/\s+/g, " ").trim().slice(0, 120), nofollow: /nofollow/i.test($(a).attr("rel") || ""), placement: template ? "nav" : "content" });
   });
   // images
   const imgs = [];
@@ -270,7 +274,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const u of sitemap.urls) if (u && inScope(u) && !seen.has(u)) { seen.set(u, null); queue.push(u); }
     const insPage = db.prepare(`INSERT OR REPLACE INTO pages (audit_id,url,final_url,status,depth,content_type,response_ms,bytes,title,description,h1,canonical,indexable,in_sitemap,outlinks,words,text_ratio,data)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    const insLink = db.prepare("INSERT INTO links (audit_id,from_url,to_url,anchor,internal,nofollow,kind) VALUES (?,?,?,?,?,?,?)");
+    const insLink = db.prepare("INSERT INTO links (audit_id,from_url,to_url,anchor,internal,nofollow,kind,placement) VALUES (?,?,?,?,?,?,?,?)");
     const insText = db.prepare("INSERT OR REPLACE INTO page_text (audit_id, url, text) VALUES (?,?,?)"); // for link suggestions (I4)
     const hashes = new Map();
     const imgSet = new Set(); const extSet = new Set();
@@ -311,7 +315,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         let internalOut = 0, extLinks = 0, extNofollow = 0, nofollowInternal = 0;
         for (const l of p.links) {
           const internal = inScope(l.to);
-          insLink.run(auditId, final, l.to, l.anchor, internal ? 1 : 0, l.nofollow ? 1 : 0, "a");
+          insLink.run(auditId, final, l.to, l.anchor, internal ? 1 : 0, l.nofollow ? 1 : 0, "a", l.placement);
           if (internal) {
             internalOut++; if (l.nofollow) nofollowInternal++;
             if (!seen.has(l.to) && /^https?:/.test(l.to) && !/\.(pdf|jpe?g|png|gif|webp|svg|zip|mp4|mp3|docx?|xlsx?)$/i.test(new URL(l.to).pathname)) {
@@ -319,7 +323,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
             } else if (seen.get(l.to) === null) seen.set(l.to, (depth ?? 0) + 1);
           } else { extLinks++; if (l.nofollow) extNofollow++; extSet.add(l.to); }
         }
-        for (const im of p.imgs) { insLink.run(auditId, final, im, "", inScope(im) ? 1 : 0, 0, "img"); if (inScope(im)) imgSet.add(im); }
+        for (const im of p.imgs) { insLink.run(auditId, final, im, "", inScope(im) ? 1 : 0, 0, "img", null); if (inScope(im)) imgSet.add(im); }
         Object.assign(d, { nofollowInternal, externalLinks: extLinks, externalNofollow: extNofollow });
         if (p.textHash && indexable) { const prev = hashes.get(p.textHash); if (prev) d.dupOf = prev; else hashes.set(p.textHash, url); }
         insPage.run(auditId, url, final, r.status, depth, r.type.split(";")[0], r.ms, bytes, p.title, p.description, p.h1, p.canonical, indexable,

@@ -37,15 +37,59 @@ pageSections.unshift(async (ctx, d) => {
   return parts.length ? h("div", { class: "stack" }, parts) : null;
 });
 
+// Page 2 → page 1: Search Console queries at positions 8–20, the site's own pages about each one, their links and
+// the target's title (src/page2.mjs).
+const mark = (ok, text) => h("div", { class: "small", style: { margin: "3px 0" } }, h("span", { class: ok ? "up" : "", style: ok ? null : { color: "var(--warn-ink)" } }, ok ? "✓ " : "! "), text);
+const LINKED = { body: ["up", "✓ in the text"], yes: ["up", "✓ linked"], menu: ["", "menu only"], none: ["down", "✕ no link"] };
+async function page2Cards(ctx) {
+  const d = await api(`/api/audits/${ctx.auditData.audit.id}/page2`).catch(() => null);
+  const base = ctx.project.start_url;
+  const head = h("div", { class: "card" }, h("h2", {}, "Page 2 → page 1"),
+    h("p", { class: "hint", style: { margin: 0 } }, "Pages Google shows at positions 8–20 for a search (Search Console", d?.range ? `, ${d.range.start_date} to ${d.range.end_date}` : "", "). For each one: your own pages that talk about that search, as a “site:” search would list them, and whether they link to it from their text. Menu and footer links don't count. Add a link in the text where it reads naturally, use the search's words in some of those links but vary them, check the title, then ask Google to recrawl."));
+  if (!d || !d.connected) return [head, h("div", { class: "card empty" }, "Connect Search Console for this site (Audit settings) to see which pages are on page 2.")];
+  if (!d.targets.length) return [head, h("div", { class: "card empty" }, "No page sits at positions 8–20 for a non-brand search with 5+ impressions.")];
+  const cards = d.targets.map((t) => {
+    const main = t.queries.find((q) => q.query === t.query) || t.queries[0];
+    const edit = t.sources.filter((s) => s.linked !== "body" && s.linked !== "yes").map((s) => s.from);
+    const urls = [t.target, ...edit].join("\n");
+    return h("div", { class: "card" },
+      h("div", { class: "card-h" }, h("h3", {}, shortUrl(t.target, base)), h("span", { class: "small muted" }, `“${t.query}” · position ${main.position} · ${main.impressions} impressions`)),
+      t.queries.length > 1 ? h("p", { class: "small muted", style: { marginTop: 0 } }, "Also on page 2 for: ", t.queries.filter((q) => q.query !== t.query).map((q) => `${q.query} (${q.position})`).join(" · ")) : null,
+      t.oldAudit ? mark(false, "This audit can't tell text links from menu links yet. Run a new audit.") : null,
+      mark(!t.toLink, t.toLink ? `${t.toLink} related page${t.toLink === 1 ? " mentions" : "s mention"} it without a link in the text: add one where the sentence fits.` : "Every related page already links to it from its text."),
+      mark(!t.anchorGap, t.anchorGap ? `No text link to it uses “${t.keyWords.join(" ")}”. Reword one or two of them (vary it, don't repeat the exact search everywhere).` : `Text links already use “${t.keyWords.join(" ")}”.`),
+      t.anchors.length ? h("p", { class: "small muted", style: { margin: "0 0 4px 18px" } }, "Link words now: ", t.anchors.slice(0, 5).map((x) => `“${x.text.slice(0, 50)}” ×${x.n}`).join(", ")) : null,
+      mark(!t.titleMissing.length, t.titleMissing.length ? `Title lacks “${t.titleMissing.join(" ")}”. Add it only if the page really is about that and the title stays within 65 characters.` : "The title has the search's words."),
+      // A list, not a table: a page, its link status and a sentence read well at phone width too.
+      t.sources.length ? h("div", { style: { marginTop: "8px" } }, h("div", { class: "small muted", style: { marginBottom: "2px" } }, "Your pages about it"),
+        t.sources.map((s) => { const [c, l] = LINKED[s.linked || "none"];
+          return h("div", { style: { padding: "8px 0", borderTop: "1px solid var(--line)" } },
+            h("div", { class: "row", style: { justifyContent: "space-between", gap: "8px", flexWrap: "nowrap" } },
+              h("span", { class: "url", style: { overflowWrap: "anywhere" } }, shortUrl(s.from, base)), h("span", { class: `small ${c}`, style: { whiteSpace: "nowrap" } }, l)),
+            h("div", { class: "small muted", style: { marginTop: "2px" } }, s.context)); }))
+        : h("p", { class: "small muted" }, "No other page mentions this search yet. A short section or blog post about it, linking here, would give it one."),
+      h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { class: "btn", onclick: () => navigator.clipboard.writeText(urls).then(() => toast("URLs copied")) }, "Copy URLs to recrawl"),
+        h("span", { class: "small muted" }, edit.length ? `this page and the ${edit.length} page${edit.length === 1 ? "" : "s"} to edit` : "this page")));
+  });
+  const after = h("div", { class: "card" }, h("h3", { style: { marginBottom: "6px" } }, "After editing: get it recrawled"),
+    h("ul", { class: "small" },
+      h("li", {}, "Search Console → URL inspection → Request indexing, for each copied URL (Google allows about 10 a day)."),
+      h("li", {}, "Update those pages' lastmod in the sitemap. Google uses it when it's accurate."),
+      h("li", {}, "IndexNow tells Bing and others straight away. Google doesn't use it."),
+      h("li", {}, "Skip paid “indexers”: they push pages through Google's Indexing API, which is only for job posts and livestreams, and Google can revoke access for misuse.")));
+  return [head, ...cards, after];
+}
+
 // I4
 VIEWS.links = async (ctx) => {
   if (!ctx.auditData) return h("div", { class: "card empty" }, "Run an audit first.");
+  const page2 = await page2Cards(ctx);
   const rows = await api(`/api/audits/${ctx.auditData.audit.id}/link-opportunities`);
   const base = ctx.project.start_url;
   const head = h("div", { class: "card" }, h("h2", {}, "Internal link ideas"),
     h("p", { class: "hint", style: { margin: 0 } }, "Pages with the fewest internal links, and other pages that already mention their topic but don't link to them. Turn the quoted words into a link: it helps Google and AI find and understand the weaker page."));
-  if (!rows.length) return [head, h("div", { class: "card empty" }, "No suggestions — either every page is well linked, or this audit was made before link ideas existed (run a new audit).")];
-  return [head, ...rows.map((t) => h("div", { class: "card" },
+  if (!rows.length) return [...page2, head, h("div", { class: "card empty" }, "No suggestions — either every page is well linked, or this audit was made before link ideas existed (run a new audit).")];
+  return [...page2, head, ...rows.map((t) => h("div", { class: "card" },
     h("div", { class: "card-h" }, h("h3", {}, shortUrl(t.target, base)), h("span", { class: "small muted" }, `${t.inlinks} internal link${t.inlinks === 1 ? "" : "s"} now`)),
     h("p", { class: "small muted", style: { marginTop: 0 } }, t.title),
     table([{ label: "Add a link on", cls: "url", get: (s) => shortUrl(s.from, base) }, { label: "Anchor text", get: (s) => h("b", {}, s.anchor) },
