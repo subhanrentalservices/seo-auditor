@@ -563,7 +563,7 @@ def cmd_schedule(args, cfg) -> int:
     from .schedule import install, remove, status
 
     if args.action == "install":
-        return install(args.time)
+        return install(args.time, args.config)
     if args.action == "remove":
         return remove()
     return status()

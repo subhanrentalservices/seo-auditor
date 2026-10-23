@@ -40,7 +40,7 @@ XML = """<?xml version="1.0" encoding="UTF-16"?>
   <Actions Context="Author">
     <Exec>
       <Command>{command}</Command>
-      <Arguments>monitor</Arguments>
+      <Arguments>{arguments}</Arguments>
       <WorkingDirectory>{workdir}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -52,17 +52,31 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def install(time: str) -> int:
+def _action(config: str | Path | None) -> tuple[str, str, str]:
+    """(program, arguments, working folder) for the daily run.
+
+    In the desktop app the engine is a packaged program (PyInstaller sets sys.frozen) and its settings live in the
+    user's app-data folder, so the task runs that program with --config. Otherwise it runs linkverify.bat here."""
+    cfg = Path(config).resolve() if config else None
+    arguments = (f'--config "{cfg}" ' if cfg else "") + "monitor"
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable)
+        return str(exe), arguments, str(cfg.parent if cfg else exe.parent)
+    return str(PROJECT / "linkverify.bat"), arguments, str(PROJECT)
+
+
+def install(time: str, config: str | Path | None = None) -> int:
     if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time):
         print("Use a 24-hour time like 09:30.")
         return 2
-    bat = PROJECT / "linkverify.bat"
+    command, arguments, workdir = _action(config)
     if sys.platform != "win32":
         print("Scheduled tasks are set up on Windows. On Mac or Linux, add this line with `crontab -e`:")
         h, m = time.split(":")
-        print(f"{int(m)} {int(h)} * * * cd '{PROJECT}' && '{sys.executable}' -m linkverify monitor")
+        run = f"'{command}' {arguments}" if getattr(sys, "frozen", False) else f"'{sys.executable}' -m linkverify {arguments}"
+        print(f"{int(m)} {int(h)} * * * cd '{workdir}' && {run}")
         return 0
-    xml = XML.format(time=time, command=_esc(str(bat)), workdir=_esc(str(PROJECT)))
+    xml = XML.format(time=time, command=_esc(command), arguments=_esc(arguments), workdir=_esc(workdir))
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     Path(path).write_text(xml, encoding="utf-16")
@@ -132,13 +146,13 @@ def query() -> dict:
     return info
 
 
-def install_quiet(time: str) -> tuple[bool, str]:
+def install_quiet(time: str, config: str | Path | None = None) -> tuple[bool, str]:
     """install() for the app: returns (ok, message) instead of printing."""
     import contextlib
     import io
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        code = install(time)
+        code = install(time, config)
     return code == 0, buf.getvalue().strip()
 
 

@@ -142,7 +142,7 @@ def schedule_set(req: Req):
     if req.body.get("action") == "remove":
         ok, msg = schedule.remove_quiet()
     else:
-        ok, msg = schedule.install_quiet(str(req.body.get("time") or "10:00"))
+        ok, msg = schedule.install_quiet(str(req.body.get("time") or "10:00"), req.app.config_path)
     if not ok:
         raise ApiError(400, msg or "Could not change the daily run.")
     return {"message": msg, **schedule.query()}

@@ -18,6 +18,8 @@ args = [
     "--add-data", f"config.example.toml{sep}.",
     "--collect-submodules", "linkverify",
     "--collect-all", "playwright",
+    "--collect-data", "tldextract",  # its offline suffix list (.tld_set_snapshot); without it the listings finder fails
+
     "engine_entry.py",
 ]
 sys.exit(subprocess.call(args, cwd=here))
