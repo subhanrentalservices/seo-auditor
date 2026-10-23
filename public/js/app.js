@@ -256,6 +256,27 @@ es.onmessage = (m) => {
   }
   if (p?.id === ev.projectId) { p.running = ev.auditId; renderTools(); }
 };
+// The "done" event is the only signal above. If it is lost (the server restarted while after-audit steps ran, or
+// the connection dropped) the progress bar would spin forever, so check with the server after a reconnect and
+// every 15 s while anything shows as running.
+async function resyncRunning() {
+  const ids = new Set([...state.progress.keys(), ...(state.project?.running ? [state.project.id] : [])]);
+  for (const id of ids) {
+    try {
+      const pr = await api(`/api/projects/${id}`);
+      if (pr.running) continue;
+      const was = state.progress.get(id)?.auditId ?? (state.project?.id === id ? state.project.running : null);
+      state.progress.delete(id);
+      const last = pr.history.find((a) => a.id === was);
+      if (last) toast(last.status === "done" ? "Audit finished" : `Audit ${last.status}` + (last.message ? `: ${last.message}` : ""));
+      if (state.project?.id === id) { state.project.running = null; if (state.route.kind === "seo") route(true); else renderTools(); }
+    } catch { /* server unreachable: try again on the next tick */ }
+  }
+}
+let esDropped = false;
+es.onerror = () => { esDropped = true; };
+es.onopen = () => { if (esDropped) { esDropped = false; resyncRunning(); } };
+setInterval(() => { if (state.progress.size || state.project?.running) resyncRunning(); }, 15000);
 
 // ---------------------------------------------------------------- link building background jobs (as in the Backlink Verifier)
 const TASK_DONE = {
