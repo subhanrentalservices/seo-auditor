@@ -13,6 +13,7 @@
   "scripts": {
     "start": "node src/server.mjs",
     "audit": "node src/cli.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "desktop": "electron .",
     "engine": "node -e \"process.exit(require('child_process').spawnSync(process.platform==='win32'?'backlinks/.venv/Scripts/python':'backlinks/.venv/bin/python',['backlinks/build-engine.py'],{stdio:'inherit'}).status)\"",
     "dist:win": "npm run engine && electron-builder --win",

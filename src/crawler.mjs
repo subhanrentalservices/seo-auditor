@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { db, run, get, all } from "./db.mjs";
 import { CHECKS, pageIssues, healthScore } from "./checks.mjs";
 import { aiPageIssues, aiSiteIssues, aiBotAccess, aiReadiness } from "./ai-checks.mjs";
-import { similarForAudit, crawlerAccess, lastmodUniformity } from "./quality.mjs";
+import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } from "./quality.mjs";
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
@@ -44,7 +44,9 @@ async function fetchOnce(url, ua, method = "GET", timeout = 20000) {
 /** Bot walls (Akamai, Cloudflare) fingerprint Node's TLS and refuse it even with a browser UA; curl usually passes. */
 function curlStatus(url) {
   return new Promise((resolve) => {
-    execFile("curl", ["-s", "-L", "--max-redirs", "5", "-m", "15", "-o", process.platform === "win32" ? "NUL" : "/dev/null", "-w", "%{http_code}", "-A", BROWSER_UA, url],
+    // Some government sites (e.g. transport.vic.gov.au) answer 403 unless the request carries a browser's Accept headers.
+    execFile("curl", ["-s", "-L", "--max-redirs", "5", "-m", "15", "-o", process.platform === "win32" ? "NUL" : "/dev/null", "-w", "%{http_code}", "-A", BROWSER_UA,
+      "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "-H", "Accept-Language: en-AU,en;q=0.9", url],
       { timeout: 20000, windowsHide: true }, (err, stdout) => resolve(Number(stdout) || 0));
   });
 }
@@ -70,19 +72,26 @@ async function fetchFollow(url, ua) {
 async function loadSitemaps(origin, robotsTxt, ua) {
   const declared = [...robotsTxt.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
   const queue = declared.length ? [...declared] : [origin + "/sitemap.xml"];
-  const urls = new Set(); const seen = new Set(); const lastmods = [];
+  const urls = new Set(); const seen = new Set(); const lastmods = []; const lastmodOf = new Map();
   while (queue.length && seen.size < 50) {
     const sm = queue.shift(); if (seen.has(sm)) continue; seen.add(sm);
     const r = await fetchFollow(sm, ua);
     if (r.status !== 200) continue;
     const locs = [...r.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map((m) => m[1].replace(/&amp;/g, "&"));
     if (/<sitemapindex/i.test(r.body)) queue.push(...locs);
-    else { locs.forEach((l) => urls.size < 100000 && urls.add(normalize(l))); lastmods.push(...[...r.body.matchAll(/<lastmod>\s*([^<\s]+)\s*<\/lastmod>/g)].map((m) => m[1])); }
+    else {
+      locs.forEach((l) => urls.size < 100000 && urls.add(normalize(l)));
+      lastmods.push(...[...r.body.matchAll(/<lastmod>\s*([^<\s]+)\s*<\/lastmod>/g)].map((m) => m[1]));
+      for (const [, block] of r.body.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
+        const loc = block.match(/<loc>\s*([^<\s]+)\s*<\/loc>/), lm = block.match(/<lastmod>\s*([^<\s]+)\s*<\/lastmod>/);
+        if (loc && lm && lastmodOf.size < 100000) lastmodOf.set(normalize(loc[1].replace(/&amp;/g, "&")), lm[1].slice(0, 10));
+      }
+    }
   }
-  return { urls, lastmods, found: seen.size > 0 && urls.size > 0, declared: declared.length > 0 };
+  return { urls, lastmods, lastmodOf, found: seen.size > 0 && urls.size > 0, declared: declared.length > 0 };
 }
 
-function parseHtml(html, url) {
+export function parseHtml(html, url) {
   const $ = cheerio.load(html);
   const d = {};
   const robotsMeta = ($('meta[name="robots"]').attr("content") || "") + " " + ($('meta[name="googlebot"]').attr("content") || "");
@@ -165,9 +174,16 @@ function parseHtml(html, url) {
   const scope = $t("main").length ? $t("main") : $t("body");
   const text = scope.text().replace(/\s+/g, " ").trim();
   const words = text ? text.split(" ").length : 0;
+  // Text-to-HTML ratio compares all visible text with the whole HTML (header and footer included on both sides);
+  // using only <main> text against the whole file under-counted pages with a big header/footer.
+  d.visibleBytes = Buffer.byteLength($t("body").text().replace(/\s+/g, " ").trim());
+  // Booking and claim pages are mostly form fields; their labels and options are the content.
+  d.formShare = +($("form").toArray().reduce((n, f) => n + ($.html(f) || "").length, 0) / Math.max(html.length, 1)).toFixed(2);
   const paras = scope.find("p").map((_, p) => $t(p).text().replace(/\s+/g, " ").trim()).get().filter((p) => p.split(" ").length >= 25);
   const firstPos = paras.length ? text.indexOf(paras[0].slice(0, 40)) / Math.max(text.length, 1) : 1;
-  d.answerEarly = paras.length > 0 && firstPos <= 0.3 && paras[0].split(" ").length <= 120;
+  // Up to 180 words, the same range as a citable passage (ai_no_citable_block): a 150-word opening paragraph that
+  // answers the question is both. The old 120-word cap made the two checks contradict each other.
+  d.answerEarly = paras.length > 0 && firstPos <= 0.3 && paras[0].split(" ").length <= 180;
   d.citableBlocks = paras.filter((p) => { const n = p.split(" ").length; return n >= 100 && n <= 180; }).length;
   // I5: the passage an AI answer would most likely lift — self-contained, specific, early, ideally 134–167 words.
   let best = null;
@@ -191,6 +207,11 @@ function parseHtml(html, url) {
   if (hiddenFaq.length) d.faqHidden = hiddenFaq.length + " of " + faqNames.length + ": " + hiddenFaq[0].slice(0, 80);
   if (crumbs && !$('[aria-label*="readcrumb" i], [class*="crumb" i], [itemtype*="BreadcrumbList"]').length) d.crumbHidden = true;
   if (bizRating) d.selfReview = true;
+  // Listing pages (a blog index, a category) link to many pages below their own folder.
+  const here = new URL(url);
+  if (here.pathname.endsWith("/") && here.pathname !== "/") {
+    d.childLinks = new Set(links.map((l) => { try { const x = new URL(l.to); return x.host === here.host && x.pathname.startsWith(here.pathname) && x.pathname !== here.pathname ? x.pathname : null; } catch { return null; } }).filter(Boolean)).size;
+  }
   return {
     title: $("title").first().text().replace(/\s+/g, " ").trim(),
     description: ($('meta[name="description"]').attr("content") || "").trim(),
@@ -199,6 +220,19 @@ function parseHtml(html, url) {
     textHash: words > 50 ? createHash("md5").update(text.toLowerCase()).digest("hex") : null,
     data: d,
   };
+}
+
+/** Last try for a link that still refuses automated checks: open it in Chrome/Edge as a reader would. A bot
+ *  challenge ("Just a moment…", "Access denied") still counts as refused. */
+async function browserStatus(browser, url) {
+  const page = await browser.newPage({ userAgent: BROWSER_UA, locale: "en-AU" });
+  try {
+    const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const status = res?.status() || 0;
+    const title = (await page.title()).toLowerCase();
+    if (/just a moment|attention required|access denied|forbidden|are you a robot|captcha|request blocked/.test(title)) return status >= 400 ? status : 403;
+    return status;
+  } catch { return 0; } finally { await page.close(); }
 }
 
 async function renderPage(browser, url, ua) {
@@ -267,7 +301,13 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         if (jsWordsRaw !== null) { d.jsWordsRaw = jsWordsRaw; d.jsWordsRendered = p.words; }
         const indexable = r.status === 200 && isHtml && !d.noindex && (!p.canonical || p.canonical === final || p.canonical === url) ? 1 : 0;
         const bytes = Buffer.byteLength(r.body || "");
-        const ratio = bytes ? +((Buffer.byteLength(p.text) / bytes) * 100).toFixed(1) : 0;
+        const ratio = bytes ? +(((d.visibleBytes ?? Buffer.byteLength(p.text)) / bytes) * 100).toFixed(1) : 0;
+        // ?service=… style links that pre-fill a form: the URL's canonical is the same page without the query, so its
+        // page checks belong to that clean URL (crawl it if no link reaches it).
+        if (p.canonical && new URL(final).search && p.canonical === final.split("?")[0]) {
+          d.variantOf = p.canonical;
+          if (inScope(p.canonical) && !seen.has(p.canonical)) { seen.set(p.canonical, depth); queue.push(p.canonical); }
+        }
         let internalOut = 0, extLinks = 0, extNofollow = 0, nofollowInternal = 0;
         for (const l of p.links) {
           const internal = inScope(l.to);
@@ -307,6 +347,15 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     };
     const imgStatus = await checkStatus(imgSet, 20000);
     const extStatus = settings.checkExternalLinks ? await checkStatus(extSet, 5000) : new Map();
+    const refused = [...extStatus].filter(([, s]) => [401, 403, 429].includes(s)).map(([u]) => u).slice(0, 40);
+    if (refused.length && !ctl.stop) {
+      let b = browser;
+      try {
+        if (!b) { const { launchChromium } = await import("./browser.mjs"); b = await launchChromium(); }
+        await pool(3, refused, async (u) => { const s = await browserStatus(b, u); if (s && s < 400) extStatus.set(u, s); }, () => ctl.stop);
+      } catch { /* no browser on this computer: keep the refused status */ }
+      finally { if (b && b !== browser) await b.close().catch(() => {}); }
+    }
     const sOf = (u) => statusOf.get(u) ?? imgStatus.get(u) ?? extStatus.get(u);
 
     // Click depth = shortest link path from the start page (sitemap-seeded pages may be crawled before a link to them is seen).
@@ -347,6 +396,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const near = similarForAudit(auditId, { min: 0.5 }).filter((x) => cluster(x.a) !== cluster(x.b));
     const access = ctl.stop ? null : await crawlerAccess(start, ua);
     const lm = lastmodUniformity(sitemap.lastmods || []);
+    // A shared date is honest after a real site-wide edit: check those pages' text against the audit before that date.
+    if (lm && lm.share >= 0.6) lm.check = lastmodChanged(project.id, auditId, lm.date, sitemap.lastmodOf);
     db.exec("BEGIN");
     for (const p of pages) {
       for (const [id, det] of pageIssues(p, ctx)) raise(id, p.url, det);
@@ -373,7 +424,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [t, us] of byTitle) if (us.length > 1 && crossCluster(us)) us.forEach((u) => raise("dup_title", u, `"${t.slice(0, 80)}" on ${us.length} pages`));
     for (const [t, us] of byDesc) if (us.length > 1 && crossCluster(us)) us.forEach((u) => raise("dup_description", u, `shared by ${us.length} pages`));
     for (const x of near) { raise("near_duplicate", x.a, `${Math.round(x.score * 100)}% of 5-word phrases shared with ${x.b}`); raise("near_duplicate", x.b, `${Math.round(x.score * 100)}% shared with ${x.a}`); }
-    if (lm && lm.share >= 0.6) raise("sitemap_lastmod_uniform", origin + "/sitemap.xml", `${lm.n} of ${lm.total} URLs have lastmod ${lm.date}`);
+    if (lm && lm.share >= 0.6 && !(lm.check?.share >= 0.7)) raise("sitemap_lastmod_uniform", origin + "/sitemap.xml",
+      `${lm.n} of ${lm.total} URLs have lastmod ${lm.date}` + (lm.check ? `; only ${lm.check.changed} of ${lm.check.n} changed since audit #${lm.check.baseAudit}` : ""));
     for (const b of access?.blocked || []) raise("ai_bot_blocked_server", start, `${b.bot}: HTTP ${b.status || "no response"}, ${b.bytes} bytes (browser: HTTP ${access.base.status}, ${access.base.bytes} bytes)`);
     if (!robotsTxt) raise("no_robots_txt", origin + "/robots.txt");
     if (!sitemap.found) raise("no_sitemap", origin + "/sitemap.xml");

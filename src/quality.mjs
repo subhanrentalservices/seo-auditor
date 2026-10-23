@@ -89,6 +89,22 @@ export function lastmodUniformity(lastmods) {
   return { date, n, total: vals.length, share: n / vals.length };
 }
 
+/** Did the pages carrying the shared lastmod really change on or after that date? Compares their main text with the
+ *  last audit of this project finished before the date (one that stored page text). Null when there is no such audit. */
+export function lastmodChanged(projectId, auditId, date, lastmodOf) {
+  const base = all(`SELECT id FROM audits WHERE project_id=? AND id<>? AND status='done' AND finished_at < ?
+    AND EXISTS (SELECT 1 FROM page_text t WHERE t.audit_id=audits.id) ORDER BY id DESC LIMIT 1`, projectId, auditId, date)[0];
+  if (!base) return null;
+  const textOf = (id) => new Map(all("SELECT url, text FROM page_text WHERE audit_id=?", id).map((r) => [r.url, r.text]));
+  const now = textOf(auditId), before = textOf(base.id);
+  let n = 0, changed = 0;
+  for (const [url, d] of lastmodOf || []) {
+    if (d !== date || !now.has(url)) continue;
+    n++; if (before.get(url) !== now.get(url)) changed++;
+  }
+  return n ? { baseAudit: base.id, n, changed, share: changed / n } : null;
+}
+
 export function register({ routes }) {
   routes.push(["GET", /^\/api\/audits\/(\d+)\/similar$/, ([id], q) => ({ pairs: similarForAudit(Number(id), { min: Number(q.min) || 0.2 }) })]);
 }

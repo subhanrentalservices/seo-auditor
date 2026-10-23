@@ -90,6 +90,8 @@ export function pageIssues(p, ctx) {
   else if (p.response_ms > 1500) add("slow_page", `${p.response_ms} ms`);
   if (d.blockedByRobots) add("blocked_by_robots");
   if (p.url.length > 115) add("url_too_long", `${p.url.length} chars`);
+  // A ?query variant whose canonical is its own clean URL is set up correctly; its content is checked on that URL.
+  if (d.variantOf) return out;
   if (p.status !== 200 || !isHtml) return out;
 
   if (p.bytes > 2 * 1024 * 1024) add("large_html", `${Math.round(p.bytes / 1024)} KB`);
@@ -103,7 +105,7 @@ export function pageIssues(p, ctx) {
   else if (d.h1Count > 1) add("multiple_h1", `${d.h1Count} H1s`);
   if (p.title && p.h1 && p.title.trim().toLowerCase() === p.h1.trim().toLowerCase()) add("dup_title_h1");
   if (p.words < 200 && p.indexable) add("low_word_count", `${p.words} words`);
-  if (p.text_ratio < 10 && p.indexable) add("low_text_ratio", `${p.text_ratio}%`);
+  if (p.text_ratio < 10 && p.indexable && !(d.formShare >= 0.4)) add("low_text_ratio", `${p.text_ratio}%`);
   if (d.imgNoAlt) add("img_missing_alt", `${d.imgNoAlt} image(s)`);
   if (!d.viewport) add("missing_viewport");
   if (!d.lang) add("missing_lang");

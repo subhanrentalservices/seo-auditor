@@ -9,7 +9,7 @@ export const AI_CHECKS = {
   ai_snippet_blocked: ["warning", "Page limits snippets (nosnippet / noarchive / nocache / max-snippet:0)", "Bing documents that these limit how Copilot and Bing answers can use and cite the page; nosnippet also removes Google snippets.", "Remove the directive unless you really want the page kept out of answers."],
   ai_bot_blocked: ["error", "AI search crawler blocked in robots.txt", "Blocked crawlers can't read the site, so it can't be cited in that AI product.", "Allow the bot in robots.txt (block training-only bots separately if you want)."],
   ai_js_dependent: ["error", "Main content needs JavaScript", "Most AI crawlers don't run JavaScript, so they see an almost empty page.", "Render the main content on the server (static HTML / SSR)."],
-  ai_no_answer: ["warning", "No direct answer near the top", "AI answers favour pages that answer the question in the first part of the page.", "Open with a short paragraph (40–120 words) that answers the page's main question."],
+  ai_no_answer: ["warning", "No direct answer near the top", "AI answers favour pages that answer the question in the first part of the page.", "Open with a paragraph (40–180 words) whose first sentences answer the page's main question."],
   ai_no_author: ["warning", "No author or reviewer signal", "Named, accountable authors are a trust signal for AI and Google.", "Show an author/reviewer with role, and add author to Article/BlogPosting schema."],
   ai_no_date: ["notice", "No published/updated date", "AI systems prefer current information and need a date to judge it.", "Show a visible 'Last updated' date and add dateModified to schema."],
   ai_no_citable_block: ["notice", "No self-contained passage of 100–180 words (experimental)", "Experimental, not a Google requirement: Google's AI optimisation guide says chunking content for AI isn't needed. Long self-contained answers may still be easier to quote.", "Add one complete answer passage per key question (about 130–170 words)."],
@@ -33,10 +33,14 @@ export function aiPageIssues(p) {
   if (!d.answerEarly) out.push(["ai_no_answer", ""]);
   // Bylines and dates are expected on articles, not on service, contact or booking pages.
   const types = d.schemaTypes || [];
-  const listing = types.some((t) => /^(Blog|CollectionPage|ItemList)$/.test(t));
-  const article = !listing && (types.some((t) => /Article|BlogPosting|Report/.test(t)) || /\/(blog|news|articles?|guides?)\/./.test(new URL(p.final_url || p.url).pathname));
+  const listing = types.some((t) => /^(Blog|CollectionPage|ItemList)$/.test(t)) || d.childLinks >= 6;
+  const path = new URL(p.final_url || p.url).pathname;
+  const article = !listing && (types.some((t) => /Article|BlogPosting|Report/.test(t)) || /\/(blog|news|articles?|guides?)\/./.test(path));
   if (article && !d.author) out.push(["ai_no_author", ""]);
   if (article && !d.dated) out.push(["ai_no_date", ""]);
+  // Answer passages and question headings suit content pages, not an index of other pages or a legal notice.
+  const legal = /\/(privacy|terms|cookies?|legal|disclaimer)[^/]*$/i.test(path);
+  if (listing || legal) return out;
   if (p.words >= 400 && !d.citableBlocks) out.push(["ai_no_citable_block", ""]);
   if (p.words >= 600 && d.headings >= 3 && !d.questionHeadings) out.push(["ai_no_question_headings", ""]);
   if (p.words >= 600 && !d.externalLinks) out.push(["ai_no_sources", ""]);
