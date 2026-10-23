@@ -44,11 +44,37 @@ VIEWS.performance = async (ctx) => {
         h("td", { class: "url" }, shortUrl(r.url, base)),
         r.error ? h("td", { colspan: 7, class: "down" }, "Failed: " + r.error) : [
           h("td", { class: "num" }, r.perf ?? "–"), h("td", { class: "num" }, rated(r.lcp_ms, T.lcp_ms, fmtS)), h("td", { class: "num" }, rated(r.cls, T.cls, (v) => v.toFixed(3))),
-          h("td", { class: "num" }, rated(r.tbt_ms, T.tbt_ms, (v) => `${num(v)} ms`)), h("td", { class: "num" }, rated(r.fcp_ms, T.fcp_ms, fmtS)),
+          h("td", { class: "num" }, rated(r.tbt_ms, T.tbt_ms, (v) => `${num(v)} ms`), rechecked(r)), h("td", { class: "num" }, rated(r.fcp_ms, T.fcp_ms, fmtS)),
           h("td", { class: "num" }, fmtS(r.si_ms)), h("td", { class: "num" }, `${num(r.transfer_kb)} KB`)]))))),
-      h("p", { class: "small muted" }, "Good / needs work / poor: LCP ≤ 2.5 s / ≤ 4 s, CLS ≤ 0.1 / ≤ 0.25, TBT ≤ 200 ms / ≤ 600 ms, FCP ≤ 1.8 s / ≤ 3 s. Click a row for fixes.")),
+      h("p", { class: "small muted" }, "Good / needs work / poor: LCP ≤ 2.5 s / ≤ 4 s, CLS ≤ 0.1 / ≤ 0.25, TBT ≤ 200 ms / ≤ 600 ms, FCP ≤ 1.8 s / ≤ 3 s. A page whose blocking time is twice the others' is re-run 5 times and its median run shown (“5 runs”). Click a row for fixes.")),
     detail];
 };
+
+/** "5 runs" marker on a re-checked page: tells a page that is slow every time from a one-off busy computer. */
+function rechecked(r) {
+  const x = r.details; if (!x?.runs) return null;
+  const tip = `Median of ${x.runs.length} runs (TBT ${x.runs.map((u) => num(u.tbt_ms)).join(", ")} ms). ` + (x.verdict === "page" ? "Slow in most runs: the page itself is slow." : "Slow in only some runs: the computer was busy during those runs.");
+  return h("div", { class: "small muted", title: tip }, x.verdict === "page" ? `slow in ${x.slowRuns}/${x.runs.length} runs` : `${x.runs.length} runs`);
+}
+
+/** Runs, long tasks and main-thread time: what kept the page busy. */
+function mainThread(x, base) {
+  if (!x.runs && !x.longTasks?.length && !x.mainThread?.length) return null;
+  const verdict = x.runs && (x.verdict === "page"
+    ? `Slow in ${x.slowRuns} of ${x.runs.length} runs: the page itself keeps the main thread busy. Fix the long tasks below.`
+    : `Slow in ${x.slowRuns} of ${x.runs.length} runs only: the slow runs came from the computer being busy, not from the page. The median run is shown.`);
+  return h("div", {}, h("h3", { style: { margin: "14px 0 6px" } }, "Main thread"),
+    verdict ? h("p", { class: "small" }, verdict) : null,
+    x.runs ? h("p", { class: "small muted" }, "Runs (TBT · CPU benchmark): " + x.runs.map((u) => `${num(u.tbt_ms)} ms · ${u.benchmark ?? "–"}`).join("  |  ")) : null,
+    x.warnings?.length ? h("p", { class: "small", style: { color: "var(--warn-ink)" } }, "! " + x.warnings.join(" ")) : null,
+    h("div", { class: "grid g2" },
+      h("div", {}, h("h4", { style: { marginBottom: "4px" } }, "Longest tasks"), x.longTasks?.length
+        ? h("ul", { class: "small" }, x.longTasks.map((t) => h("li", {}, `${num(t.ms)} ms `, h("span", { class: "muted" }, `at ${fmtS(t.startMs)} · `), shortUrl(t.url, base))))
+        : h("p", { class: "small muted" }, "No long tasks (over 50 ms).")),
+      h("div", {}, h("h4", { style: { marginBottom: "4px" } }, "Time by activity"), x.mainThread?.length
+        ? h("ul", { class: "small" }, x.mainThread.map((g) => h("li", {}, `${g.label}: ${num(g.ms)} ms`)))
+        : h("p", { class: "small muted" }, "–"))));
+}
 
 function pageCard(r, base) {
   const x = r.details || {};
@@ -56,7 +82,8 @@ function pageCard(r, base) {
     x.lcpElement ? h("p", { class: "small" }, "Largest element: ", h("code", {}, x.lcpElement)) : null,
     h("div", { class: "grid g2" },
       h("div", {}, h("h3", { style: { marginBottom: "6px" } }, "Speed opportunities"), x.opportunities?.length ? h("ul", {}, x.opportunities.map((o) => h("li", {}, o.title, h("span", { class: "muted" }, o.savingsMs ? ` — saves ~${fmtS(o.savingsMs)}` : o.savingsKb ? ` — saves ~${num(o.savingsKb)} KB` : "")))) : h("p", { class: "muted" }, "None flagged.")),
-      h("div", {}, h("h3", { style: { marginBottom: "6px" } }, "Failed checks"), x.failed?.length ? h("ul", {}, x.failed.map((f) => h("li", {}, h("span", { class: "muted" }, f.category + ": "), f.title))) : h("p", { class: "muted" }, "None."))));
+      h("div", {}, h("h3", { style: { marginBottom: "6px" } }, "Failed checks"), x.failed?.length ? h("ul", {}, x.failed.map((f) => h("li", {}, h("span", { class: "muted" }, f.category + ": "), f.title))) : h("p", { class: "muted" }, "None."))),
+    mainThread(x, base));
 }
 
 overviewCards.push(async (ctx) => {

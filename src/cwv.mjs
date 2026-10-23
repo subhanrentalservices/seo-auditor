@@ -8,6 +8,10 @@ import { afterAudit, phase } from "./runner.mjs";
 
 export const THRESHOLDS = { lcp_ms: [2500, 4000], cls: [0.1, 0.25], tbt_ms: [200, 600], fcp_ms: [1800, 3000] };
 const CATEGORIES = ["performance", "accessibility", "best-practices", "seo"];
+// Total Blocking Time swings most between runs when the computer is busy (Lighthouse's variability guide: run 5 times,
+// use the median). A page whose TBT is "needs work" or worse and at least twice the site's median is re-run.
+export const RECHECK_RUNS = 5;
+const RECHECK_MAX_PAGES = 10;
 
 /** Picks up to n pages: the start page, then the most-linked page of each site section in turn. */
 export function pickPages(auditId, n) {
@@ -43,8 +47,40 @@ async function audit(port, url) {
     tbt_ms: Math.round(A["total-blocking-time"]?.numericValue ?? 0), fcp_ms: Math.round(A["first-contentful-paint"]?.numericValue ?? 0),
     si_ms: Math.round(A["speed-index"]?.numericValue ?? 0), transfer_kb: Math.round((A["total-byte-weight"]?.numericValue ?? 0) / 1024),
     perf: score("performance"), a11y: score("accessibility"), bp: score("best-practices"), seo: score("seo"),
-    details: { opportunities, failed, lcpElement: A["largest-contentful-paint-element"]?.details?.items?.[0]?.items?.[0]?.node?.snippet || null },
+    details: {
+      opportunities, failed, lcpElement: A["largest-contentful-paint-element"]?.details?.items?.[0]?.items?.[0]?.node?.snippet || null,
+      // CPU speed Lighthouse measured just before this run: lower than the other runs = the computer was busy.
+      benchmark: Math.round(lhr.environment?.benchmarkIndex || 0) || null,
+      longTasks: (A["long-tasks"]?.details?.items || []).slice().sort((a, b) => b.duration - a.duration).slice(0, 5)
+        .map((t) => ({ url: typeof t.url === "string" ? t.url : "Unattributable", ms: Math.round(t.duration), startMs: Math.round(t.startTime || 0) })),
+      mainThread: (A["mainthread-work-breakdown"]?.details?.items || []).slice().sort((a, b) => b.duration - a.duration).slice(0, 4)
+        .map((g) => ({ label: g.groupLabel || g.group, ms: Math.round(g.duration) })),
+      warnings: (lhr.runWarnings || []).map((w) => String(w).slice(0, 200)).slice(0, 3),
+    },
   };
+}
+
+const median = (v) => { const s = v.slice().sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+/** Pages to re-run: TBT worse than "good" and at least twice the median of the other pages (any TBT worse than good
+ *  when fewer than 3 pages were measured). A site that is slow everywhere has a high median, so nothing is re-run. */
+export function recheckTargets(rows) {
+  const ok = rows.filter((r) => Number.isFinite(r.tbt_ms));
+  const mid = ok.length >= 3 ? median(ok.map((r) => r.tbt_ms)) : 0;
+  return ok.filter((r) => r.tbt_ms > THRESHOLDS.tbt_ms[0] && r.tbt_ms >= 2 * Math.max(mid, 50))
+    .sort((a, b) => b.tbt_ms - a.tbt_ms).slice(0, RECHECK_MAX_PAGES).map((r) => r.url);
+}
+
+/** Of several runs of one page, the one with the median TBT (ties: median FCP), plus a verdict: slow in most runs =
+ *  the page itself blocks the main thread; slow in a minority = the first result was the computer being busy. */
+export function medianRun(runs) {
+  const tbt = median(runs.map((m) => m.tbt_ms)), fcp = median(runs.map((m) => m.fcp_ms));
+  const best = runs.slice().sort((a, b) => Math.abs(a.tbt_ms - tbt) - Math.abs(b.tbt_ms - tbt) || Math.abs(a.fcp_ms - fcp) - Math.abs(b.fcp_ms - fcp))[0];
+  const slow = runs.filter((m) => m.tbt_ms > THRESHOLDS.tbt_ms[0]).length;
+  const verdict = slow * 2 > runs.length ? "page" : "noise";
+  return { ...best, details: { ...best.details,
+    runs: runs.map((m) => ({ tbt_ms: m.tbt_ms, perf: m.perf, lcp_ms: m.lcp_ms, benchmark: m.details?.benchmark ?? null })),
+    verdict, slowRuns: slow } };
 }
 
 export async function runCwv(auditId, project, settings, n = settings.cwvPages) {
@@ -53,19 +89,34 @@ export async function runCwv(auditId, project, settings, n = settings.cwvPages) 
   const { chromiumPath } = await import("./browser.mjs");
   const chrome = await chromeLauncher.launch({ chromePath: await chromiumPath(), chromeFlags: ["--headless=new", "--no-first-run", "--disable-extensions"] });
   const out = [];
+  const save = (url, m, update) => run(update
+    ? "UPDATE cwv SET lcp_ms=?, cls=?, tbt_ms=?, transfer_kb=?, fcp_ms=?, si_ms=?, perf=?, a11y=?, bp=?, seo=?, details=? WHERE audit_id=? AND url=?"
+    : "INSERT INTO cwv (lcp_ms, cls, tbt_ms, transfer_kb, fcp_ms, si_ms, perf, a11y, bp, seo, details, audit_id, url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    m.lcp_ms, m.cls, m.tbt_ms, m.transfer_kb, m.fcp_ms, m.si_ms, m.perf, m.a11y, m.bp, m.seo, JSON.stringify(m.details), auditId, url);
   try {
     run("DELETE FROM cwv WHERE audit_id=?", auditId);
     for (const [i, url] of urls.entries()) {
       phase(project.id, auditId, `Lighthouse ${i + 1}/${urls.length}`);
       try {
         const m = await audit(chrome.port, url);
-        run("INSERT INTO cwv (audit_id, url, lcp_ms, cls, tbt_ms, transfer_kb, fcp_ms, si_ms, perf, a11y, bp, seo, details) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          auditId, url, m.lcp_ms, m.cls, m.tbt_ms, m.transfer_kb, m.fcp_ms, m.si_ms, m.perf, m.a11y, m.bp, m.seo, JSON.stringify(m.details));
+        save(url, m);
         out.push({ url, ...m });
       } catch (e) {
         run("INSERT INTO cwv (audit_id, url, error) VALUES (?,?,?)", auditId, url, String(e.message).slice(0, 300));
         console.error("lighthouse", url, e.message);
       }
+    }
+    const targets = recheckTargets(out);
+    for (const [i, url] of targets.entries()) {
+      const k = out.findIndex((r) => r.url === url), runs = [out[k]];
+      for (let j = 2; j <= RECHECK_RUNS; j++) {
+        phase(project.id, auditId, `Re-checking slow page ${i + 1}/${targets.length} (run ${j}/${RECHECK_RUNS})`);
+        try { runs.push(await audit(chrome.port, url)); } catch (e) { console.error("lighthouse re-check", url, e.message); }
+      }
+      if (runs.length < 3) continue;
+      const m = medianRun(runs);
+      save(url, m, true);
+      out[k] = { url, ...m };
     }
   } finally { try { await chrome.kill(); } catch {} }
   return out;
