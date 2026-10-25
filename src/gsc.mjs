@@ -24,10 +24,12 @@ export function config() {
 const keyFile = () => config().gscKeyFile || DEFAULT_KEY;
 
 let client;
-async function gsc(urlPath, body) {
+/** Search Console API call: a webmasters/v3 path, or a full https:// URL (e.g. the v1 URL Inspection endpoint). */
+export async function gsc(urlPath, body) {
   if (!existsSync(keyFile())) throw Object.assign(new Error(`Search Console key file not found: ${keyFile()}`), { status: 400 });
   client ||= await new GoogleAuth({ keyFile: keyFile(), scopes: ["https://www.googleapis.com/auth/webmasters.readonly"] }).getClient();
-  const res = await client.request({ url: "https://searchconsole.googleapis.com/webmasters/v3/" + urlPath, method: body ? "POST" : "GET", data: body });
+  const url = urlPath.startsWith("https://") ? urlPath : "https://searchconsole.googleapis.com/webmasters/v3/" + urlPath;
+  const res = await client.request({ url, method: body ? "POST" : "GET", data: body });
   return res.data;
 }
 
