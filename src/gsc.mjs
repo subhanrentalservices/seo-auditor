@@ -81,6 +81,37 @@ export async function refresh(project) {
   return { property, pages: pages.length, queries: queries.length, days: daily.length };
 }
 
+// Expected organic CTR by position on today's results pages (AI Overviews, local packs): the midpoint of 2026
+// published studies (First Page Sage, GrowthSRC, Advanced Web Ranking). A yardstick, not a promise.
+export const EXPECTED_CTR = [0.19, 0.126, 0.102, 0.072, 0.051, 0.044, 0.03, 0.021, 0.019, 0.016];
+const BANDS = [[1, 3, "1–3"], [3.0001, 10, "4–10"], [10.0001, 20, "11–20"], [20.0001, 50, "21–50"], [50.0001, Infinity, "51+"]];
+
+/** Where impressions and clicks come from (position band × brand), and page-1 queries clicked far less than expected. */
+export function ctrReport(rows, isBrand) {
+  const bands = BANDS.map(([lo, hi, label]) => {
+    const b = { band: label, brand: { impressions: 0, clicks: 0 }, other: { impressions: 0, clicks: 0 } };
+    for (const r of rows) if (r.position >= lo && r.position <= hi) { const k = isBrand(r.query) ? b.brand : b.other; k.impressions += r.impressions; k.clicks += r.clicks; }
+    return b;
+  });
+  const byQuery = new Map();
+  for (const r of rows) {
+    const q = byQuery.get(r.query) || { query: r.query, impressions: 0, clicks: 0, w: 0, page: r.page, top: 0 };
+    q.impressions += r.impressions; q.clicks += r.clicks; q.w += r.position * r.impressions;
+    if (r.impressions > q.top) { q.top = r.impressions; q.page = r.page; }
+    byQuery.set(r.query, q);
+  }
+  const gaps = [];
+  for (const q of byQuery.values()) {
+    const position = q.w / q.impressions;
+    if (position > 10.5 || isBrand(q.query)) continue;
+    const expected = EXPECTED_CTR[Math.max(0, Math.round(position) - 1)] * q.impressions;
+    if (expected >= 1 && q.clicks < expected / 2) gaps.push({ query: q.query, page: q.page, impressions: q.impressions, clicks: q.clicks, position, expectedClicks: expected });
+  }
+  const total = rows.reduce((t, r) => t + r.impressions, 0);
+  const deep = bands.slice(3).reduce((t, b) => t + b.brand.impressions + b.other.impressions, 0);
+  return { bands, gaps: gaps.sort((a, b) => b.expectedClicks - b.clicks - (a.expectedClicks - a.clicks)).slice(0, 50), deepShare: total ? deep / total : 0 };
+}
+
 export function summary(projectId) {
   const meta = get("SELECT value FROM meta WHERE key=?", `gsc:${projectId}`);
   if (!meta) return { connected: false };
@@ -104,7 +135,8 @@ export function summary(projectId) {
   const brandKeys = [new URL(p.start_url).hostname.replace(/^www./, "").split(".")[0], p.name.toLowerCase().replace(/[^a-z0-9]/g, "")].filter((k) => k.length >= 4);
   const isBrand = (q) => brandKeys.some((k) => q.toLowerCase().replace(/[^a-z0-9]/g, "").includes(k));
   for (const r of [...topQueries, ...quickWins, ...cannibal]) r.brand = isBrand(r.query);
-  return { connected: true, ...m, totals: { ...totals, ctr: totals.impressions ? totals.clicks / totals.impressions : 0, position: pos },
+  const ctr = ctrReport(all("SELECT query, page, clicks, impressions, position FROM gsc_queries WHERE project_id=?", projectId), isBrand);
+  return { connected: true, ...m, ctr, totals: { ...totals, ctr: totals.impressions ? totals.clicks / totals.impressions : 0, position: pos },
     keywords: get("SELECT COUNT(DISTINCT query) n FROM gsc_queries WHERE project_id=?", projectId).n,
     top3: get("SELECT COUNT(*) n FROM (SELECT query, SUM(position*impressions)/SUM(impressions) p FROM gsc_queries WHERE project_id=? GROUP BY query) WHERE p <= 3", projectId).n,
     top10: get("SELECT COUNT(*) n FROM (SELECT query, SUM(position*impressions)/SUM(impressions) p FROM gsc_queries WHERE project_id=? GROUP BY query) WHERE p <= 10", projectId).n,
