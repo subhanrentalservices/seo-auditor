@@ -53,7 +53,11 @@ export async function call(endpoint, body, projectId, send = dfs) {
 }
 
 async function checkChatGpt(prompt, loc, b, pid) {
-  const r = await call("ai_optimization/chat_gpt/llm_scraper/live/advanced", { keyword: prompt, location_code: loc, language_code: "en", force_web_search: true }, pid);
+  return parseChatGpt(await call("ai_optimization/chat_gpt/llm_scraper/live/advanced", { keyword: prompt, location_code: loc, language_code: "en", force_web_search: true }, pid), b);
+}
+
+/** ChatGPT llm_scraper result: markdown, sources, local business cards and brand entities. */
+export function parseChatGpt(r, b) {
   const sources = (r.sources || []).map((x) => ({ domain: host(x.domain || x.url), url: x.url, title: x.title }));
   const names = [];
   for (const it of r.items || []) {
@@ -62,7 +66,9 @@ async function checkChatGpt(prompt, loc, b, pid) {
   }
   for (const e of r.brand_entities || []) names.push({ name: e.title, domain: host(e.urls?.[0]?.domain || "") });
   const uniq = []; for (const n of names) if (n.name && !uniq.some((u) => compact(u.name) === compact(n.name))) uniq.push(n);
-  const idx = uniq.findIndex((n) => b.mentions(n.name) || (n.domain && b.isOwn(n.domain)));
+  // Rank = place in the answer's own list ("**1. Name**"); the business cards are a fallback (they can leave the brand out).
+  const listed = listedNames(r.markdown).findIndex((n) => b.mentions(n));
+  const idx = listed >= 0 ? listed : uniq.findIndex((n) => b.mentions(n.name) || (n.domain && b.isOwn(n.domain)));
   return { present: 1, mentioned: b.mentions(r.markdown) || idx >= 0 ? 1 : 0, cited: sources.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: idx >= 0 ? idx + 1 : null,
     sources, brands: uniq.slice(0, 15).map((n) => n.name), excerpt: (r.markdown || "").slice(0, 1500), check_url: r.check_url || null };
 }
@@ -90,13 +96,16 @@ async function checkAiMode(prompt, loc, b, pid) {
     sources: refs, brands: [], excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null };
 }
 /** Business names an answer lists: bold text that opens a bullet or a paragraph (numbered steps are skipped). */
+const LABEL = /^(phone|address|website|hours|email|note|tip|why|best for|services|location|contact)$/i;
 export function listedNames(markdown) {
   const out = [];
   for (const m of String(markdown || "").matchAll(/^[ \t]*(?:[-*•][ \t]+)?\*\*([^*\n]{2,80}?)\*\*/gm)) {
-    const name = m[1].replace(/[:\s]+$/, "").trim();
-    if (name && !out.some((n) => compact(n) === compact(name))) out.push(name);
+    const numbered = /^\d+\\?\.\s/.test(m[1]);
+    const name = m[1].replace(/^\d+\\?\.\s*/, "").replace(/[\\:\s]+$/, "").trim(); // "**1\. Name**" → "Name"
+    if (name && !LABEL.test(name) && !out.some((n) => compact(n.name) === compact(name))) out.push({ name, numbered });
   }
-  return out;
+  // An answer that numbers its picks ("**1. Name**") ranks those; other bold lines are labels or notes.
+  return (out.some((n) => n.numbered) ? out.filter((n) => n.numbered) : out).map((n) => n.name);
 }
 
 function textAnswer(text, sourceList, b) {

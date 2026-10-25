@@ -44,6 +44,15 @@ test("numbered steps and mid-sentence bold are not business names", () => {
   assert.deepEqual(listedNames("1. **Gather information:** photos.\nCall **000** first.\n- **Bolt Panels:** towing"), ["Bolt Panels"]);
 });
 
+test("ChatGPT: rank comes from the answer's numbered list when the business cards leave the brand out", async () => {
+  const { parseChatGpt } = await import("../src/visibility.mjs");
+  const md = "Here are good options:\n\n**1\\. Acme Motors — Springfield**\n5 Main St\n**Phone\\:** 03 0000 0000\n\n**2\\. Crash Co**\nTowing.";
+  const r = parseChatGpt({ markdown: md, sources: [{ domain: "acmemotors.com.au", url: "https://acmemotors.com.au/?utm_source=chatgpt.com" }],
+    items: [{ type: "chat_gpt_local_businesses", items: [{ title: "Crash Co", domain: "crashco.com.au" }] }] }, b);
+  assert.deepEqual([r.mentioned, r.cited, r.rank], [1, 1, 1]);
+  assert.deepEqual(listedNames(md), ["Acme Motors — Springfield", "Crash Co"]);
+});
+
 test("both platforms are offered with a cost estimate", () => {
   for (const k of ["perplexity", "gemini"]) assert.ok(PLATFORMS[k].cost > 0 && PLATFORMS[k].label);
 });
