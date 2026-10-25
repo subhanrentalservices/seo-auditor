@@ -53,7 +53,9 @@ export async function dfs(endpoint, body, projectId, method = "POST") {
   const j = await res.json().catch(() => ({}));
   if (j.cost) run("INSERT INTO dfs_costs (project_id, endpoint, cost) VALUES (?,?,?)", projectId ?? null, endpoint, j.cost);
   const t = j.tasks?.[0];
-  if (j.status_code !== 20000 || !t || t.status_code !== 20000) fail(502, `DataForSEO: ${t?.status_message || j.status_message || res.status}`);
+  // "Task completed with partial results": the first pages came back (later ones did not, and are not charged). Keep them.
+  const partial = t?.result?.[0] && /partial results/i.test(t.status_message || "");
+  if (j.status_code !== 20000 || !t || (t.status_code !== 20000 && !partial)) fail(502, `DataForSEO: ${t?.status_message || j.status_message || res.status}`);
   return t.result?.[0] || {};
 }
 

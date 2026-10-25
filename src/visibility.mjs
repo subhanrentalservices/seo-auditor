@@ -67,8 +67,8 @@ export function parseChatGpt(r, b) {
   for (const e of r.brand_entities || []) names.push({ name: e.title, domain: host(e.urls?.[0]?.domain || "") });
   const uniq = []; for (const n of names) if (n.name && !uniq.some((u) => compact(u.name) === compact(n.name))) uniq.push(n);
   // Rank = place in the answer's own list ("**1. Name**"); the business cards are a fallback (they can leave the brand out).
-  const listed = listedNames(r.markdown).findIndex((n) => b.mentions(n));
-  const idx = listed >= 0 ? listed : uniq.findIndex((n) => b.mentions(n.name) || (n.domain && b.isOwn(n.domain)));
+  const listed = listRank(r.markdown, b);
+  const idx = listed ? listed - 1 : uniq.findIndex((n) => b.mentions(n.name) || (n.domain && b.isOwn(n.domain)));
   return { present: 1, mentioned: b.mentions(r.markdown) || idx >= 0 ? 1 : 0, cited: sources.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: idx >= 0 ? idx + 1 : null,
     sources, brands: uniq.slice(0, 15).map((n) => n.name), excerpt: (r.markdown || "").slice(0, 1500), check_url: r.check_url || null };
 }
@@ -96,24 +96,38 @@ async function checkAiMode(prompt, loc, b, pid) {
     sources: refs, brands: [], excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null };
 }
 /** Business names an answer lists: bold text that opens a bullet or a paragraph (numbered steps are skipped). */
-const LABEL = /^(phone|address|website|hours|email|note|tip|why|best for|services|location|contact)$/i;
-export function listedNames(markdown) {
+const LABEL = /^(phone|address|website|hours|email|note|tip|why|best for|services|location|contact|focus|details)$/i;
+// Candidate names in answer order: bold text opening a bullet or paragraph ("**1\. Name**", "- **Name:**") and numbered
+// headings ("### 1. Name"). Numbered bullets ("1. **Gather information**") are steps, not picks.
+function candidates(markdown) {
   const out = [];
-  for (const m of String(markdown || "").matchAll(/^[ \t]*(?:[-*•][ \t]+)?\*\*([^*\n]{2,80}?)\*\*/gm)) {
-    const numbered = /^\d+\\?\.\s/.test(m[1]);
-    const name = m[1].replace(/^\d+\\?\.\s*/, "").replace(/[\\:\s]+$/, "").trim(); // "**1\. Name**" → "Name"
-    if (name && !LABEL.test(name) && !out.some((n) => compact(n.name) === compact(name))) out.push({ name, numbered });
+  for (const m of String(markdown || "").matchAll(/^[ \t]*(?:(#{1,4})[ \t]+(\d+\\?\.[ \t]+[^\n]{2,80})|(?:[-*•][ \t]+)?\*\*([^*\n]{2,80}?)\*\*)/gm)) {
+    const raw = (m[2] || m[3]).replace(/\*\*/g, "");
+    const numbered = Boolean(m[2]) || /^\d+\\?\.\s/.test(raw);
+    const name = raw.replace(/^\d+\\?\.\s*/, "").replace(/[\\:\s]+$/, "").trim(); // "1\. Name:" → "Name"
+    if (name && !LABEL.test(name) && !out.some((n) => compact(n.name) === compact(name))) out.push({ name, numbered, heading: Boolean(m[2]) });
   }
-  // An answer that numbers its picks ("**1. Name**") ranks those; other bold lines are labels or notes.
-  return (out.some((n) => n.numbered) ? out.filter((n) => n.numbered) : out).map((n) => n.name);
+  return out;
+}
+/** Business names an answer lists; when it numbers its picks, only the numbered ones (other bold lines are labels or notes). */
+export function listedNames(markdown) {
+  const c = candidates(markdown);
+  return (c.some((n) => n.numbered) ? c.filter((n) => n.numbered) : c).map((n) => n.name);
+}
+/** The brand's place in the answer: among numbered picks first, else among bold names (headings there are categories). */
+export function listRank(markdown, b) {
+  const c = candidates(markdown);
+  const i = c.filter((n) => n.numbered).findIndex((n) => b.mentions(n.name));
+  if (i >= 0) return i + 1;
+  const j = c.filter((n) => !n.heading).findIndex((n) => b.mentions(n.name));
+  return j >= 0 ? j + 1 : null;
 }
 
 function textAnswer(text, sourceList, b) {
   const seen = new Set(), sources = [];
   for (const x of sourceList) { const url = String(x.url || "").replace(/#:~:text=.*$/, ""); if (url && !seen.has(url)) { seen.add(url); sources.push({ domain: host(x.domain || url), url, title: x.title || x.source_name || "" }); } }
   const names = listedNames(text);
-  const idx = names.findIndex((n) => b.mentions(n));
-  return { present: text ? 1 : 0, mentioned: b.mentions(text) ? 1 : 0, cited: sources.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: idx >= 0 ? idx + 1 : null,
+  return { present: text ? 1 : 0, mentioned: b.mentions(text) ? 1 : 0, cited: sources.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: listRank(text, b),
     sources, brands: names.slice(0, 15), excerpt: String(text || "").slice(0, 1500), check_url: null };
 }
 

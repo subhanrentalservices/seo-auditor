@@ -50,7 +50,7 @@ Needs Node.js 22 or newer. After copying the folder to another PC, run `npm inst
 | Search Console | Clicks, impressions, keywords, quick wins, pages competing for one query | Free |
 | Keywords | Every keyword the domain ranks for in Google (DataForSEO) | ≈ $0.03 per refresh |
 | Backlinks | Backlinks, referring domains, anchors, spam review and a disavow file | ≈ $0.08 per refresh |
-| AI visibility | Your prompts on ChatGPT, Google AI Overviews and Google AI Mode: are you mentioned or cited? | ≈ $0.014 per prompt |
+| AI visibility | Your prompts on ChatGPT, Google AI Overviews, Google AI Mode, Perplexity and Gemini: are you mentioned, cited, and where do you rank? | ≈ $0.024 per prompt (all five) |
 
 Paid requests run only when you press their button, and stop at the monthly budget in **App settings**
 (default $2).

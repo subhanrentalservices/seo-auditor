@@ -53,6 +53,14 @@ test("ChatGPT: rank comes from the answer's numbered list when the business card
   assert.deepEqual(listedNames(md), ["Acme Motors — Springfield", "Crash Co"]);
 });
 
+test("Gemini: numbered headings are picks; category headings don't push the brand down", () => {
+  const picks = parseGemini({ markdown: "Options:\n\n### 1. Acme Motors\n* **Address:** 5 Main St\n\n### 2. Crash Co\n* **Focus:** towing", sources: [] }, b);
+  assert.equal(picks.rank, 1);
+  assert.deepEqual(picks.brands, ["Acme Motors", "Crash Co"]);
+  const grouped = parseGemini({ markdown: "### 1. Workshop inspections\n* **Crash Co**\n* **Acme Motors**\n\n### 2. Mobile inspections\n* **Bolt Panels**", sources: [] }, b);
+  assert.equal(grouped.rank, 2);
+});
+
 test("both platforms are offered with a cost estimate", () => {
   for (const k of ["perplexity", "gemini"]) assert.ok(PLATFORMS[k].cost > 0 && PLATFORMS[k].label);
 });
@@ -69,6 +77,22 @@ test("server errors are retried up to three times; other errors are not", async 
   n = 0;
   await assert.rejects(call("x", {}, null, async () => { n++; throw new Error("DataForSEO: Internal SE Server Error."); }), /Internal/);
   assert.equal(n, 4);
+});
+
+test("DataForSEO partial results are kept; other task errors still fail", async () => {
+  const { dfs, saveConfig } = await import("../src/dataforseo.mjs");
+  saveConfig({ dfsLogin: "test", dfsPassword: "test", dfsMonthlyBudget: 5 });
+  const real = globalThis.fetch;
+  const reply = (status_code, status_message, result) => async () => ({ json: async () => ({ status_code: 20000, cost: 0, tasks: [{ status_code, status_message, result }] }) });
+  try {
+    globalThis.fetch = reply(40102, "Task completed with partial results. Some pages could not be retrieved after several retry attempts.", [{ items: [{ type: "organic" }] }]);
+    assert.deepEqual(await dfs("serp/google/organic/live/advanced", {}, null), { items: [{ type: "organic" }] });
+    globalThis.fetch = reply(40501, "Invalid Field: 'keyword'.", null);
+    await assert.rejects(dfs("serp/google/organic/live/advanced", {}, null), /Invalid Field/);
+  } finally {
+    globalThis.fetch = real;
+    saveConfig({ dfsLogin: "", dfsPassword: "" });
+  }
 });
 
 test("a run without a DataForSEO login stops before it starts", async () => {
