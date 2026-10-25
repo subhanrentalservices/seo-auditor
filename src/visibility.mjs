@@ -1,8 +1,8 @@
 // AI Visibility: for each saved prompt, ask ChatGPT (web search), Google (AI Overview + organic + local pack in one
-// SERP) and Google AI Mode through DataForSEO, then record whether the brand is mentioned, cited and where it
+// SERP), Google AI Mode, Perplexity and Gemini through DataForSEO, then record whether the brand is mentioned, cited and where it
 // ranks, plus which other domains get cited. Paid per prompt; runs only when the owner starts it.
 import { db, all, get, run, projectSettings } from "./db.mjs";
-import { dfs } from "./dataforseo.mjs";
+import { dfs, dfsConfigured } from "./dataforseo.mjs";
 import { emit } from "./runner.mjs";
 
 db.exec(`
@@ -19,7 +19,13 @@ export const PLATFORMS = {
   chatgpt: { label: "ChatGPT (web search)", cost: 0.004 },
   google: { label: "Google: AI Overview + rankings", cost: 0.006 },
   ai_mode: { label: "Google AI Mode", cost: 0.004 },
+  perplexity: { label: "Perplexity (Sonar, web search)", cost: 0.006 },
+  gemini: { label: "Gemini", cost: 0.004 },
 };
+
+// DataForSEO country location codes are 2000 + the ISO 3166 numeric code; Perplexity wants the two-letter code.
+const COUNTRY_ISO = { 2036: "AU", 2840: "US", 2826: "GB", 2124: "CA", 2554: "NZ", 2372: "IE", 2356: "IN", 2586: "PK", 2702: "SG",
+  2784: "AE", 2710: "ZA", 2276: "DE", 2250: "FR", 2724: "ES", 2380: "IT", 2528: "NL" };
 
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return String(u || "").replace(/^www\./, ""); } };
 const compact = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -34,11 +40,15 @@ export function brandMatcher(project) {
   return { domain, isOwn, mentions: (text) => { const c = compact(text); return keys.some((k) => c.includes(k)); } };
 }
 
-async function call(endpoint, body, projectId) {
-  try { return await dfs(endpoint, body, projectId); }
-  catch (e) {
-    if (/40101|50000|Internal|timeout/i.test(e.message)) { await new Promise((r) => setTimeout(r, 3000)); return dfs(endpoint, body, projectId); }
-    throw e;
+// DataForSEO's live SERP often answers "Internal SE Server Error" (about 1 call in 4 for Google); later tries usually work.
+export const RETRY_WAITS = [3000, 10000, 30000];
+export async function call(endpoint, body, projectId, send = dfs) {
+  for (let i = 0; ; i++) {
+    try { return await send(endpoint, body, projectId); }
+    catch (e) {
+      if (i >= RETRY_WAITS.length || !/40101|50000|Internal|timeout/i.test(e.message)) throw e;
+      await new Promise((r) => setTimeout(r, RETRY_WAITS[i]));
+    }
   }
 }
 
@@ -79,7 +89,49 @@ async function checkAiMode(prompt, loc, b, pid) {
   return { present: aio ? 1 : 0, mentioned: aio && b.mentions(aio.markdown) ? 1 : 0, cited: refs.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: null,
     sources: refs, brands: [], excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null };
 }
-const CHECK = { chatgpt: checkChatGpt, google: checkGoogle, ai_mode: checkAiMode };
+/** Business names an answer lists: bold text that opens a bullet or a paragraph (numbered steps are skipped). */
+export function listedNames(markdown) {
+  const out = [];
+  for (const m of String(markdown || "").matchAll(/^[ \t]*(?:[-*•][ \t]+)?\*\*([^*\n]{2,80}?)\*\*/gm)) {
+    const name = m[1].replace(/[:\s]+$/, "").trim();
+    if (name && !out.some((n) => compact(n) === compact(name))) out.push(name);
+  }
+  return out;
+}
+
+function textAnswer(text, sourceList, b) {
+  const seen = new Set(), sources = [];
+  for (const x of sourceList) { const url = String(x.url || "").replace(/#:~:text=.*$/, ""); if (url && !seen.has(url)) { seen.add(url); sources.push({ domain: host(x.domain || url), url, title: x.title || x.source_name || "" }); } }
+  const names = listedNames(text);
+  const idx = names.findIndex((n) => b.mentions(n));
+  return { present: text ? 1 : 0, mentioned: b.mentions(text) ? 1 : 0, cited: sources.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: idx >= 0 ? idx + 1 : null,
+    sources, brands: names.slice(0, 15), excerpt: String(text || "").slice(0, 1500), check_url: null };
+}
+
+/** Perplexity llm_responses result: items[].sections[] with text and annotations (title, url). */
+export function parsePerplexity(r, b) {
+  const sections = (r.items || []).flatMap((i) => i.sections || []).filter((s) => s.type === "text" || s.text);
+  return textAnswer(sections.map((s) => s.text).join("\n\n"), sections.flatMap((s) => s.annotations || []), b);
+}
+
+/** Gemini llm_scraper result: markdown plus sources (domain, url, title, source_name). */
+export function parseGemini(r, b) {
+  const sources = [...(r.sources || []), ...(r.items || []).flatMap((i) => i.sources || [])];
+  return textAnswer(r.markdown || (r.items || []).map((i) => i.markdown).filter(Boolean).join("\n\n"), sources, b);
+}
+
+async function checkPerplexity(prompt, loc, b, pid) {
+  const iso = COUNTRY_ISO[loc];
+  const r = await call("ai_optimization/perplexity/llm_responses/live", { user_prompt: prompt, model_name: "sonar", max_output_tokens: 1500, ...(iso ? { web_search_country_iso_code: iso } : {}) }, pid);
+  return parsePerplexity(r, b);
+}
+
+async function checkGemini(prompt, loc, b, pid) {
+  return parseGemini(await call("ai_optimization/gemini/llm_scraper/live/advanced", { keyword: prompt, location_code: loc, language_code: "en" }, pid), b);
+}
+
+const CHECK = { chatgpt: checkChatGpt, google: checkGoogle, ai_mode: checkAiMode, perplexity: checkPerplexity, gemini: checkGemini };
+const COUNTRY_LEVEL = new Set(["chatgpt", "perplexity", "gemini"]); // these take a country, not a city
 
 const runningRuns = new Set();
 export async function startRun(project, platforms) {
@@ -88,6 +140,7 @@ export async function startRun(project, platforms) {
   if (!prompts.length) throw Object.assign(new Error("Add some prompts first"), { status: 400 });
   if (!platforms.length) throw Object.assign(new Error("Pick at least one platform"), { status: 400 });
   if (runningRuns.has(project.id)) throw Object.assign(new Error("A visibility run is already in progress"), { status: 409 });
+  if (!dfsConfigured()) throw Object.assign(new Error("DataForSEO login not found. Add it in Settings → DataForSEO."), { status: 400 });
   const s = projectSettings(project);
   const country = Number(s.dfsLocation) || 2036;
   const local = Number(s.aiLocation) || country; // city-level location for Google; ChatGPT only takes countries
@@ -104,7 +157,7 @@ export async function startRun(project, platforms) {
       while (jobs.length && !stopped) {
         const [prompt, pl] = jobs.shift();
         try {
-          const x = await CHECK[pl](prompt, pl === "chatgpt" ? country : local, b, project.id);
+          const x = await CHECK[pl](prompt, COUNTRY_LEVEL.has(pl) ? country : local, b, project.id);
           ins.run(runId, prompt, pl, x.present, x.mentioned, x.cited, x.rank, x.organic_pos ?? null, x.local_pos ?? null, JSON.stringify(x.sources), JSON.stringify(x.brands), x.excerpt, x.check_url, null);
         } catch (e) {
           if (e.status === 402) stopped = e.message; // budget reached: stop the whole run

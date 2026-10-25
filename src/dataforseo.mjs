@@ -38,6 +38,7 @@ function login() {
   } catch { return null; }
 }
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
+export const dfsConfigured = () => Boolean(login());
 export const budget = () => Number(config().dfsMonthlyBudget ?? 2);
 export const spentThisMonth = () => get("SELECT COALESCE(SUM(cost),0) s FROM dfs_costs WHERE ts >= strftime('%Y-%m-01','now')").s;
 
@@ -157,7 +158,10 @@ export function register({ routes }) {
     if (b.dfsLogin !== undefined) patch.dfsLogin = String(b.dfsLogin).slice(0, 200);
     if (b.dfsPassword !== undefined && b.dfsPassword !== "") patch.dfsPassword = String(b.dfsPassword).slice(0, 200);
     if (b.gscKeyFile !== undefined) patch.gscKeyFile = String(b.gscKeyFile).slice(0, 500);
-    if (b.dfsConfigPath !== undefined) patch.dfsConfigPath = String(b.dfsConfigPath).slice(0, 500);
+    if (b.dfsConfigPath !== undefined) {
+      patch.dfsConfigPath = String(b.dfsConfigPath).trim().slice(0, 500);
+      if (patch.dfsConfigPath && !existsSync(patch.dfsConfigPath)) fail(400, `File not found: ${patch.dfsConfigPath}`);
+    }
     const c = saveConfig(patch);
     return { dfsMonthlyBudget: c.dfsMonthlyBudget ?? 2, dfsLogin: c.dfsLogin || "", gscKeyFile: c.gscKeyFile || "", dfsConfigPath: c.dfsConfigPath || "" };
   }]);
