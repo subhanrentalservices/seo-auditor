@@ -14,7 +14,7 @@ const STOP = new Set(("a an and are as at be by for from how i in is it its me m
   "why will with you your vs best top cheap").split(" "));
 const norm = (s) => String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^a-z0-9&]+/g, " ").trim();
 // Light stemmer, applied to both sides: service/services/servicing → "servic", repairs → "repair", cars → "car".
-const stem = (w) => (w.length > 4 ? w.replace(/(ings|ing|es|e|s)$/, "") : w.length === 4 ? w.replace(/([^s])s$/, "$1") : w);
+export const stem = (w) => (w.length > 4 ? w.replace(/(ings|ing|es|e|s)$/, "") : w.length === 4 ? w.replace(/([^s])s$/, "$1") : w);
 export const words = (s) => norm(s).split(" ").filter((w) => w && !STOP.has(w)).map(stem);
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 

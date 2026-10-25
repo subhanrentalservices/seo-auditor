@@ -4,7 +4,18 @@
 // those the page's text never actually covers and the words they keep using. Fix by answering them on the page where
 // it genuinely serves the reader; never by pasting keyword or suburb lists (keyword stuffing / doorway patterns).
 import { all, get } from "./db.mjs";
-import { brandTest, mention, words } from "./page2.mjs";
+import { brandTest, mention, words, stem } from "./page2.mjs";
+
+// The search's own words, as typed, without stop words.
+const tokens = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9&]+/g, " ").trim().split(" ").filter((w) => w && words(w).length);
+// "log book" and "logbook" are the same word to a reader and to Google: join a pair when the page uses it joined.
+export function joinCompounds(toks, has) {
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (i + 1 < toks.length && has(stem(toks[i] + toks[i + 1]))) { out.push(toks[i] + toks[i + 1]); i++; } else out.push(toks[i]);
+  }
+  return out;
+}
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 
@@ -24,11 +35,16 @@ export function topicCoverage(auditId, { maxPosition = 50, minImpressions = 2, p
     if (!text) continue;
     const doc = `${p.title || ""} ${text}`;
     const docWords = new Set(words(doc));
+    const docToks = tokens(doc);
+    for (let i = 0; i + 1 < docToks.length; i++) docWords.add(stem(docToks[i] + docToks[i + 1])); // page writes "log book", search "logbook"
     const uncovered = [];
     for (const q of qs) {
-      const core = [...new Set(words(q.query))];
-      if (!core.length || mention(doc, q.query, core)) continue;
-      uncovered.push({ query: q.query, impressions: q.impressions, position: q.position, missing: core.filter((w) => !docWords.has(w)) });
+      const toks = joinCompounds(tokens(q.query), (w) => docWords.has(w));
+      const core = [...new Set(toks.map(stem))];
+      if (!core.length || mention(doc, q.query, core) || mention(doc, toks.join(" "), core)) continue;
+      const missing = [...new Set(toks.filter((w) => !docWords.has(stem(w))))];
+      if (!missing.length && toks.length < tokens(q.query).length) continue; // only differed by a split word
+      uncovered.push({ query: q.query, impressions: q.impressions, position: q.position, missing });
     }
     // Words that recur across the uncovered variations: the parts of the topic the page doesn't talk about.
     const gap = new Map();

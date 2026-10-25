@@ -24,15 +24,24 @@ q("how much does a roadworthy cost", 8, 22);      // "much", "cost"
 q("acme motors rwc", 30, 2);                      // brand: ignored
 q("roadworthy certificate", 1, 9);                // under 2 impressions: ignored
 q("roadworthy springfield south", 5, 70);         // beyond position 50: ignored
+q("road worthy certificate springfield", 6, 12);  // split word: the page says "roadworthy", so it's covered
 
 test("lists searches the page doesn't cover, with the words it never uses", () => {
   const d = topicCoverage(991);
   const p = d.pages.find((x) => x.url === S + "/rwc.html");
-  assert.equal(p.queries, 4);
-  assert.equal(p.covered, 1);
+  assert.equal(p.queries, 5);
+  assert.equal(p.covered, 2, "\"road worthy\" is the page's \"roadworthy\"");
   assert.deepEqual(p.uncovered.map((u) => u.query), ["roadworthy cost springfield", "how much does a roadworthy cost", "rwc inspection brakes"]);
   assert.equal(p.missingWords[0].word, "cost", "the word worth most impressions comes first");
   assert.ok(p.missingWords.some((w) => w.word === "rwc"));
+});
+
+test("missing words are shown as written, not as stems", async () => {
+  const { joinCompounds } = await import("../src/topics.mjs");
+  assert.deepEqual(joinCompounds(["log", "book", "service"], (w) => w === "logbook"), ["logbook", "service"]);
+  run("INSERT INTO gsc_queries (project_id, query, page, clicks, impressions, ctr, position) VALUES (990, 'roadworthy narre warren', ?, 0, 9, 0, 30)", S + "/rwc.html");
+  const p = topicCoverage(991).pages.find((y) => y.url === S + "/rwc.html");
+  assert.deepEqual(p.uncovered.find((u) => u.query === "roadworthy narre warren").missing, ["narre", "warren"]);
 });
 
 test("works without Search Console", async () => {
