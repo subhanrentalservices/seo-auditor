@@ -15,7 +15,7 @@ const STOP = new Set(("a an and are as at be by for from how i in is it its me m
 const norm = (s) => String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^a-z0-9&]+/g, " ").trim();
 // Light stemmer, applied to both sides: service/services/servicing → "servic", repairs → "repair", cars → "car".
 const stem = (w) => (w.length > 4 ? w.replace(/(ings|ing|es|e|s)$/, "") : w.length === 4 ? w.replace(/([^s])s$/, "$1") : w);
-const words = (s) => norm(s).split(" ").filter((w) => w && !STOP.has(w)).map(stem);
+export const words = (s) => norm(s).split(" ").filter((w) => w && !STOP.has(w)).map(stem);
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 
 /** Brand queries ("acme", "acme plumbing", "acme plumbers") say nothing about a topic page; skip them. */

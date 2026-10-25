@@ -41,6 +41,23 @@ pageSections.unshift(async (ctx, d) => {
 // the target's title (src/page2.mjs).
 const mark = (ok, text) => h("div", { class: "small", style: { margin: "3px 0" } }, h("span", { class: ok ? "up" : "", style: ok ? null : { color: "var(--warn-ink)" } }, ok ? "✓ " : "! "), text);
 const LINKED = { body: ["up", "✓ in the text"], yes: ["up", "✓ linked"], menu: ["", "menu only"], none: ["down", "✕ no link"] };
+// Topic coverage: long-tail searches Google already shows a page for that its text never covers (src/topics.mjs).
+async function topicsCard(ctx) {
+  const d = await api(`/api/audits/${ctx.auditData.audit.id}/topics`).catch(() => null);
+  if (!d?.connected || !d.pages.length) return null;
+  const base = ctx.project.start_url;
+  const pages = d.pages.filter((p) => p.uncovered.length);
+  return h("div", { class: "card" }, h("h2", {}, `Topic coverage (${pages.length} pages)`),
+    h("p", { class: "hint" }, `A page ranks for many variations of its topic, including searches no keyword tool lists. These are non-brand searches Google already shows each page for (top ${d.maxPosition}) `,
+      "that the page's text never covers. Answer the ones the page genuinely serves (a sentence, a section, an FAQ answer). Don't paste lists of keywords or suburbs: that's keyword stuffing and can hurt the page."),
+    pages.length ? pages.map((p) => h("details", { style: { borderTop: "1px solid var(--line)", padding: "8px 0" } },
+      h("summary", {}, h("b", {}, shortUrl(p.url, base)), h("span", { class: "small muted" }, ` · ${p.covered} of ${p.queries} searches covered`,
+        p.missingWords.length ? ` · words it never uses: ${p.missingWords.map((w) => w.word).join(", ")}` : "")),
+      table([{ label: "Search not covered", key: "query" }, { label: "Impr.", num: true, key: "impressions" }, { label: "Pos.", num: true, get: (r) => r.position.toFixed(1) },
+        { label: "Words the page never uses", get: (r) => r.missing.join(", ") || "all used, never together" }], p.uncovered)))
+      : h("p", {}, "Every page covers the searches Google shows it for."));
+}
+
 async function page2Cards(ctx) {
   const d = await api(`/api/audits/${ctx.auditData.audit.id}/page2`).catch(() => null);
   const base = ctx.project.start_url;
@@ -83,7 +100,7 @@ async function page2Cards(ctx) {
 // I4
 VIEWS.links = async (ctx) => {
   if (!ctx.auditData) return h("div", { class: "card empty" }, "Run an audit first.");
-  const page2 = await page2Cards(ctx);
+  const page2 = [...(await page2Cards(ctx)), await topicsCard(ctx)].filter(Boolean);
   const rows = await api(`/api/audits/${ctx.auditData.audit.id}/link-opportunities`);
   const base = ctx.project.start_url;
   const head = h("div", { class: "card" }, h("h2", {}, "Internal link ideas"),
