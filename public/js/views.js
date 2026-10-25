@@ -91,15 +91,20 @@ VIEWS.issues = async (ctx) => {
   if (!ctx.auditData) return noAudit(ctx);
   const groups = ctx.auditData.groups;
   const aid = ctx.auditData.audit.id;
-  const tabs = [["all", "All"], ["error", "Errors"], ["warning", "Warnings"], ["notice", "Notices"], ["ai", "AI search"], ["fixed", "Fixed"]];
+  const tabs = [["all", "All"], ["error", "Errors"], ["warning", "Warnings"], ["notice", "Notices"], ["crawl", "Crawlability"], ["ai", "AI search"], ["fixed", "Fixed"]];
   let tab = ctx.route.q.tab || "all";
   const listEl = h("div", { class: "card", style: { padding: "6px 10px" } });
   const tabBar = h("div", { class: "tabs" });
   const draw = () => {
     mount(tabBar, tabs.map(([k, l]) => h("button", { class: k === tab ? "on" : "", onclick: () => { tab = k; draw(); } }, l, " ",
-      h("span", { class: "muted" }, num(k === "all" ? groups.filter((g) => g.count && !g.ai).length : k === "ai" ? groups.filter((g) => g.ai && g.count).length : k === "fixed" ? groups.filter((g) => g.fixed).length : groups.filter((g) => g.severity === k && g.count && !g.ai).length)))));
-    const shown = groups.filter((g) => tab === "fixed" ? g.fixed : tab === "ai" ? g.ai && g.count : g.count && !g.ai && (tab === "all" || g.severity === tab));
-    mount(listEl, shown.length ? shown.map((g) => issueRow(ctx, aid, g, g.id === ctx.route.arg)) : h("div", { class: "empty" }, tab === "fixed" ? "Nothing fixed since the previous audit." : "No issues in this group."));
+      h("span", { class: "muted" }, num(k === "all" ? groups.filter((g) => g.count && !g.ai).length : k === "crawl" ? groups.filter((g) => g.crawl && g.count).length : k === "ai" ? groups.filter((g) => g.ai && g.count).length : k === "fixed" ? groups.filter((g) => g.fixed).length : groups.filter((g) => g.severity === k && g.count && !g.ai).length)))));
+    const shown = groups.filter((g) => tab === "fixed" ? g.fixed : tab === "ai" ? g.ai && g.count : tab === "crawl" ? g.crawl && g.count : g.count && !g.ai && (tab === "all" || g.severity === tab));
+    const rows = shown.length ? shown.map((g) => issueRow(ctx, aid, g, g.id === ctx.route.arg)) : [h("div", { class: "empty" }, tab === "fixed" ? "Nothing fixed since the previous audit." : "No issues in this group.")];
+    // Crawlability lists what passed too: an empty list should read as "checked and fine", not "not checked".
+    const passed = tab === "crawl" ? (ctx.auditData.crawlChecks || []).filter((c) => !groups.some((g) => g.id === c.id && g.count)) : [];
+    if (passed.length) rows.push(h("details", { style: { padding: "8px 2px" } }, h("summary", { class: "small" }, `Passed (${passed.length} of ${ctx.auditData.crawlChecks.length} crawlability checks)`),
+      h("ul", { class: "small", style: { margin: "6px 0 0 18px" } }, passed.map((c) => h("li", {}, "✓ ", c.title)))));
+    mount(listEl, rows);
   };
   draw();
   return [h("div", { class: "row", style: { justifyContent: "space-between" } }, h("p", { class: "hint", style: { margin: 0 } }, "Click an issue for why it matters, how to fix it and the affected URLs. AI-search issues don't count toward Site Health."),

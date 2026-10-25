@@ -1,6 +1,6 @@
 // REST handlers. Each returns a JSON-able value or throws an Error with .status.
 import { all, get, run, projectSettings, DEFAULT_SETTINGS } from "./db.mjs";
-import { CHECKS } from "./checks.mjs";
+import { CHECKS, CRAWL } from "./checks.mjs";
 import "./ai-checks.mjs";
 import { startAudit, stop, activeAudit } from "./runner.mjs";
 
@@ -79,7 +79,9 @@ export function getAudit(id) {
   const a = audit(id);
   const prev = previousAudit(a);
   const groups = issueGroups(a, prev);
-  return { audit: shapeAudit(a), previous: shapeAudit(prev), project: project(a.project_id), groups,
+  // Every crawlability check with its title, so the screen can show the ones that passed too.
+  const crawlChecks = [...CRAWL].map((cid) => ({ id: cid, title: CHECKS[cid][1], severity: CHECKS[cid][0] }));
+  return { audit: shapeAudit(a), previous: shapeAudit(prev), project: project(a.project_id), groups, crawlChecks,
     depth: all("SELECT depth, COUNT(*) n FROM pages WHERE audit_id=? GROUP BY depth ORDER BY depth", a.id),
     statuses: all("SELECT status, COUNT(*) n FROM pages WHERE audit_id=? GROUP BY status ORDER BY status", a.id) };
 }
@@ -97,12 +99,12 @@ function issueGroups(a, prev) {
       added = [...curKeys].filter((k) => k.startsWith(r.check_id + "\u0000") && !prevKeys.has(k)).length;
       fixed = [...prevKeys].filter((k) => k.startsWith(r.check_id + "\u0000") && !curKeys.has(k)).length;
     }
-    return { id: r.check_id, severity, title, why, fix, count: r.n, pages: r.pages, added, fixed, ai: r.check_id.startsWith("ai_") };
+    return { id: r.check_id, severity, title, why, fix, count: r.n, pages: r.pages, added, fixed, ai: r.check_id.startsWith("ai_"), crawl: CRAWL.has(r.check_id) };
   });
   if (prevKeys) { // checks that disappeared completely
     const gone = new Map();
     for (const k of prevKeys) { const id = k.split("\u0000")[0]; if (!cur.some((c) => c.check_id === id)) gone.set(id, (gone.get(id) || 0) + 1); }
-    for (const [id, n] of gone) { const [severity, title, why, fix] = CHECKS[id] || ["notice", id, "", ""]; out.push({ id, severity, title, why, fix, count: 0, pages: 0, added: 0, fixed: n, ai: id.startsWith("ai_") }); }
+    for (const [id, n] of gone) { const [severity, title, why, fix] = CHECKS[id] || ["notice", id, "", ""]; out.push({ id, severity, title, why, fix, count: 0, pages: 0, added: 0, fixed: n, ai: id.startsWith("ai_"), crawl: CRAWL.has(id) }); }
   }
   return out.sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.count - x.count);
 }

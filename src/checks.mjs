@@ -66,7 +66,29 @@ export const CHECKS = {
   schema_self_review: ["notice", "Rating or review markup on the business's own entity", "Google ignores self-serving review markup for LocalBusiness and Organization on their own site and may treat it as spam.", "Remove aggregateRating/review from your own business markup; show real reviews as plain content instead."],
   near_duplicate: ["notice", "Near-duplicate page (shares most of its text with another page)", "Pages that differ only by a swapped place or keyword match Google's doorway and scaled-content spam patterns, and near-duplicates get clustered so only one is shown.", "Give each page facts that are only true for it, or merge the pages. Compare with: node src/cli.mjs similar <project>."],
   sitemap_lastmod_uniform: ["notice", "Most sitemap URLs share one lastmod date", "Google and Bing use lastmod only when it is consistently accurate; a bulk date looks like a site-wide reset.", "Set each URL's lastmod to the date its content last really changed."],
+
+  // ---------------- Crawlability (Google Search Central crawling docs) ----------------
+  robots_txt_error: ["error", "robots.txt answers with a server error or not at all", "When robots.txt returns 5xx or times out, Google stops crawling the whole site until it can read it again.", "Make /robots.txt return 200 (or 404 if you have none) quickly and reliably."],
+  robots_disallow_all: ["error", "robots.txt blocks Googlebot from the site", "Google can't fetch any page, so nothing new gets indexed and existing pages lose their snippets.", "Remove the Disallow: / rule for Googlebot (or *) unless the site really must stay out of Google."],
+  robots_txt_large: ["warning", "robots.txt over 500 KiB", "Google ignores everything after the first 500 KiB of robots.txt.", "Shorten it: group rules with wildcards and remove obsolete lines."],
+  robots_blocks_resources: ["warning", "robots.txt blocks CSS or JavaScript the page needs", "Google renders pages like a browser; blocked files can make it see a broken or empty page.", "Allow the site's CSS and JS files in robots.txt."],
+  soft_404: ["error", "Missing pages answer 200 (soft 404)", "A page that doesn't exist should return 404/410. A 200 makes every mistyped or deleted URL look like a real, empty page, which wastes crawling and gets flagged as soft 404s.", "Return HTTP 404 (or 410 for removed pages) from the not-found page."],
+  host_variant_tls: ["error", "Address variant shows a certificate error", "Visitors who type this version (often www) get a browser security warning, and Google can't follow its redirect.", "Get a certificate that covers this host name (e.g. reissue the SSL to include www), then confirm it 301s to the main address."],
+  host_variant_missing: ["warning", "Address variant doesn't load", "People type www (or not) out of habit; if that version has no DNS record they get an error page.", "Add the DNS record (e.g. CNAME www → your domain) and 301 it to the main address."],
+  host_variant_redirect: ["warning", "Address variant doesn't 301 to the main address", "http/https and www/non-www versions should all permanently redirect to one address so links and signals land on one site.", "Redirect every variant with a 301 straight to the main address."],
+  uncrawlable_links: ["warning", "Links Google can't follow", "Google follows only <a> elements with an href URL; javascript: links and clickable elements without href hide the pages behind them.", "Use <a href=\"/page.html\"> for every link to a page."],
+  meta_refresh: ["warning", "Meta refresh redirect", "Google treats meta refresh as a redirect but prefers server-side 301s; delays and loops confuse users.", "Replace it with a 301 redirect on the server."],
+  nofollow_page: ["warning", "Page tells crawlers not to follow any of its links (meta nofollow)", "Google won't use this page's links to discover or credit the pages they point to.", "Remove nofollow from the robots meta tag unless that's intended."],
+  sitemap_blocked: ["error", "Sitemap lists URLs blocked by robots.txt", "The sitemap asks Google to crawl pages robots.txt forbids, so they can't be indexed properly.", "Remove those URLs from the sitemap, or allow them in robots.txt."],
+  links_to_redirect: ["notice", "Internal links point at redirecting URLs", "Every redirect is an extra fetch for crawlers and an extra hop for visitors.", "Point the links straight at the final URL."],
+  param_trap: ["warning", "Many ?parameter copies of one page", "Crawlers spend their visits on endless variants of the same page instead of real pages.", "Link to the clean URL, give variants a canonical to it, or stop generating crawlable parameter links."],
 };
+
+/** Checks shown under the Crawlability tab: can search engines reach and fetch the pages? */
+export const CRAWL = new Set(["http_4xx", "http_5xx", "broken_internal_link", "redirect_chain", "temporary_redirect", "permanent_redirect", "very_slow", "http_page",
+  "blocked_by_robots", "no_robots_txt", "no_sitemap", "sitemap_not_in_robots", "sitemap_bad_url", "noindex_in_sitemap", "sitemap_orphan", "not_in_sitemap", "deep_page",
+  "single_inlink", "nofollow_internal", "url_too_long", "robots_txt_error", "robots_disallow_all", "robots_txt_large", "robots_blocks_resources", "soft_404",
+  "host_variant_tls", "host_variant_missing", "host_variant_redirect", "uncrawlable_links", "meta_refresh", "nofollow_page", "sitemap_blocked", "links_to_redirect", "param_trap"]);
 
 export const SEVERITY = (id) => CHECKS[id][0];
 
@@ -122,6 +144,9 @@ export function pageIssues(p, ctx) {
   if (d.hreflangBad) add("hreflang_issue", d.hreflangBad);
   if (p.outlinks > 300) add("many_links", `${p.outlinks} links`);
   if (d.nofollowInternal) add("nofollow_internal", `${d.nofollowInternal} link(s)`);
+  if (d.jsLinks) add("uncrawlable_links", `${d.jsLinks} link(s)${d.jsLinkExample ? `, e.g. ${d.jsLinkExample}` : ""}`);
+  if (d.metaRefresh) add("meta_refresh", d.metaRefresh);
+  if (d.nofollowMeta) add("nofollow_page");
   if (d.externalLinks > 2 && d.externalLinks === d.externalNofollow) add("external_nofollow_all");
   if (p.depth > 3) add("deep_page", `depth ${p.depth}`);
   if (p.indexable && ctx.sitemapLoaded && !p.in_sitemap) add("not_in_sitemap");

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { db, run, get, all } from "./db.mjs";
 import { CHECKS, pageIssues, healthScore } from "./checks.mjs";
+import { crawlabilitySiteIssues, paramTraps } from "./crawlability.mjs";
 import { aiPageIssues, aiSiteIssues, aiBotAccess, aiReadiness } from "./ai-checks.mjs";
 import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } from "./quality.mjs";
 
@@ -99,6 +100,13 @@ export function parseHtml(html, url) {
   // nosnippet / noarchive / nocache / max-snippet:0 limit how search and AI answers (Bing Copilot) may quote the page.
   const snip = robotsMeta.match(/nosnippet|noarchive|nocache|max-snippet\s*:\s*0\b/i);
   if (snip) d.snippetBlock = snip[0];
+  // Crawlability: page-level nofollow, meta refresh redirects, and navigation done in JavaScript (not an <a href>).
+  if (/\b(nofollow|none)\b/i.test(robotsMeta)) d.nofollowMeta = true;
+  const refresh = $("meta[http-equiv]").filter((_, e) => /^refresh$/i.test($(e).attr("http-equiv"))).attr("content");
+  if (refresh && /url\s*=/i.test(refresh)) d.metaRefresh = refresh.slice(0, 120);
+  const JSNAV = /(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\(|window\.open\()\s*['"]([^'"]+)/i;
+  const jsNav = $("[onclick], a[href^='javascript:' i]").map((_, e) => ($(e).attr("onclick") || $(e).attr("href") || "").match(JSNAV)?.[1]).get().filter(Boolean);
+  if (jsNav.length) { d.jsLinks = jsNav.length; d.jsLinkExample = jsNav[0].slice(0, 80); }
   const canon = $('link[rel="canonical"]');
   d.canonicals = canon.length;
   const canonical = canon.length ? normalize(canon.first().attr("href"), url) : null;
@@ -399,6 +407,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // Research-based site checks (quality.mjs): computed before the write transaction because they fetch.
     const near = similarForAudit(auditId, { min: 0.5 }).filter((x) => cluster(x.a) !== cluster(x.b));
     const access = ctl.stop ? null : await crawlerAccess(start, ua);
+    const crawlSite = ctl.stop ? [] : await crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua }).catch(() => []);
+    const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
     const lm = lastmodUniformity(sitemap.lastmods || []);
     // A shared date is honest after a real site-wide edit: check those pages' text against the audit before that date.
     if (lm && lm.share >= 0.6) lm.check = lastmodChanged(project.id, auditId, lm.date, sitemap.lastmodOf);
@@ -409,10 +419,12 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       if (p.data.dupOf && cluster(p.url) !== cluster(p.data.dupOf)) raise("dup_content", p.url, `same text as ${p.data.dupOf}`);
       if (p.status === 200 && p.indexable && p.inlinks === 1) raise("single_inlink", p.url);
       if (p.in_sitemap && p.inlinks === 0 && p.url !== start) raise("sitemap_orphan", p.url);
+      if (p.in_sitemap && p.data.blockedByRobots) raise("sitemap_blocked", p.url);
       if (p.in_sitemap && (p.status !== 200 || p.data.redirect)) raise("sitemap_bad_url", p.url, p.data.redirect ? "redirects" : `HTTP ${p.status}`);
       if (p.canonical && p.canonical !== p.url) { const s = sOf(p.canonical); if (s && s !== 200) raise("canonical_broken", p.url, `${p.canonical} → HTTP ${s}`); }
     }
     for (const l of db.prepare("SELECT DISTINCT from_url,to_url,internal,kind FROM links WHERE audit_id=?").iterate(auditId)) { // streamed: large sites have millions of links
+      if (l.kind === "a" && l.internal && redirOf.has(l.to_url)) raise("links_to_redirect", l.from_url, `${l.to_url} → ${redirOf.get(l.to_url)}`);
       const s = sOf(l.to_url);
       if (!s || s < 400) continue;
       if (l.kind === "img" && l.internal) raise("broken_internal_image", l.from_url, `${l.to_url} → ${s}`);
@@ -436,6 +448,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     else if (robotsTxt && !sitemap.declared) raise("sitemap_not_in_robots", origin + "/robots.txt");
     if (llms.status !== 200) raise("no_llms_txt", origin + "/llms.txt");
     for (const [id, det] of aiSiteIssues(robotsTxt, origin)) raise(id, origin + "/robots.txt", det);
+    for (const [id, u, det] of crawlSite) raise(id, u, det);
+    for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     db.exec("COMMIT");
 
     // ---- totals and health ----
