@@ -60,6 +60,8 @@ export async function dfs(endpoint, body, projectId, method = "POST") {
 }
 
 const domainOf = (p) => new URL(p.start_url).hostname.replace(/^www\./, "");
+// How many referring domains and anchors each backlinks snapshot stores (the diff and the anchor mix only see these).
+export const RD_LIST_CAP = 100, ANCHOR_LIST_CAP = 30;
 
 export async function fetchKeywords(project) {
   const s = projectSettings(project);
@@ -85,8 +87,8 @@ export async function fetchKeywords(project) {
 export async function fetchBacklinks(project) {
   const target = domainOf(project);
   const sum = await dfs("backlinks/summary/live", { target, include_subdomains: true, backlinks_status_type: "live" }, project.id);
-  const refs = await dfs("backlinks/referring_domains/live", { target, include_subdomains: true, limit: 100, order_by: ["rank,desc"], backlinks_status_type: "live" }, project.id);
-  const anchors = await dfs("backlinks/anchors/live", { target, include_subdomains: true, limit: 30, order_by: ["backlinks,desc"], backlinks_status_type: "live" }, project.id);
+  const refs = await dfs("backlinks/referring_domains/live", { target, include_subdomains: true, limit: RD_LIST_CAP, order_by: ["rank,desc"], backlinks_status_type: "live" }, project.id);
+  const anchors = await dfs("backlinks/anchors/live", { target, include_subdomains: true, limit: ANCHOR_LIST_CAP, order_by: ["backlinks,desc"], backlinks_status_type: "live" }, project.id);
   const data = {
     referringDomains: (refs.items || []).map((x) => ({ domain: x.domain, rank: x.rank, backlinks: x.backlinks, dofollow: x.dofollow ?? null, spam: x.backlinks_spam_score, firstSeen: x.first_seen })),
     anchors: (anchors.items || []).map((x) => ({ anchor: x.anchor, backlinks: x.backlinks, domains: x.referring_domains })),
@@ -116,12 +118,75 @@ export function spamReview(data) {
   return { spamAnchors: spamAnchors.map((a) => a.anchor), anchorShare, flagged };
 }
 
+// ---------- Snapshot diff and anchor mix: stored snapshots only, no paid call ----------
+/** Referring domains gained and lost between two snapshots ({...bl_snapshots row, data}), totals delta, new spam domains. */
+export function snapshotDiff(prev, last) {
+  const pd = prev.data.referringDomains || [], ld = last.data.referringDomains || [];
+  const before = new Set(pd.map((d) => d.domain)), now = new Set(ld.map((d) => d.domain));
+  const gained = ld.filter((d) => !before.has(d.domain)), lost = pd.filter((d) => !now.has(d.domain));
+  const capped = pd.length >= RD_LIST_CAP || ld.length >= RD_LIST_CAP;
+  const has = (v) => v !== null && v !== undefined;
+  const totals = Object.fromEntries(["backlinks", "ref_domains", "dofollow", "rank", "spam_score"].map((k) => [k, has(last[k]) && has(prev[k]) ? last[k] - prev[k] : null]));
+  return { since: prev.fetched_at, until: last.fetched_at, gained, lost, totals, newSpam: gained.filter((d) => (d.spam ?? 0) >= 60).map((d) => d.domain),
+    capped, cap: capped ? RD_LIST_CAP : null,
+    note: capped ? `Compared from the top ${RD_LIST_CAP} referring domains (by rank) stored with each snapshot: a domain that moved into or out of the top ${RD_LIST_CAP} also shows here.` : null };
+}
+
+const GENERIC_ANCHORS = new Set(["click here", "here", "click", "this", "website", "web site", "the website", "this website", "our website", "their website",
+  "official website", "site", "this site", "web", "homepage", "home page", "home", "read more", "more", "learn more", "find out more", "more info",
+  "more information", "see more", "view more", "details", "visit", "visit website", "visit site", "visit us", "link", "this link", "source",
+  "url", "go", "check it out", "view", "view website", "website link", "www", "continue reading"]);
+const normText = (s) => String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const NAKED_URL = /^(https?:\/\/)?(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/\S*)?$/i;
+export const ANCHOR_TYPES = { brand: "Brand", naked: "Naked URL", generic: "Generic", exact: "Exact-match commercial", other: "Other" };
+export const EXACT_WARN_SHARE = 0.2;
+
+/** Anchor share by type, weighted by backlinks. brandTerms: names/domains that count as brand; queries: Search Console
+ *  queries, most clicked first (brand ones are dropped, the first topN non-brand ones are used for exact match). */
+export function anchorMix(anchors, { brandTerms = [], queries = [], topN = 50 } = {}) {
+  const brands = [...new Set(brandTerms.map((t) => normText(t).replace(/ /g, "")).filter((t) => t.length >= 4))];
+  const isBrand = (n) => brands.some((b) => n.replace(/ /g, "").includes(b));
+  const qs = [...new Set(queries.map(normText).filter((q) => q.length >= 3 && !isBrand(q)))].slice(0, topN);
+  const typeOf = (anchor) => {
+    const raw = String(anchor || "").trim();
+    if (!raw) return "other"; // empty: image links
+    if (NAKED_URL.test(raw)) return "naked";
+    const n = normText(raw);
+    if (isBrand(n)) return "brand";
+    if (GENERIC_ANCHORS.has(n)) return "generic";
+    if (qs.some((q) => n === q || ` ${n} `.includes(` ${q} `))) return "exact";
+    return "other";
+  };
+  const by = Object.fromEntries(Object.keys(ANCHOR_TYPES).map((k) => [k, { type: k, label: ANCHOR_TYPES[k], backlinks: 0, anchors: [] }]));
+  for (const a of anchors) { const t = by[typeOf(a.anchor)]; t.backlinks += a.backlinks || 0; t.anchors.push(a.anchor || "(empty / image)"); }
+  const total = Object.values(by).reduce((s, t) => s + t.backlinks, 0);
+  const types = Object.values(by).map((t) => ({ ...t, share: total ? t.backlinks / total : 0, anchors: t.anchors.slice(0, 5) }));
+  const exactShare = total ? by.exact.backlinks / total : 0;
+  return { types, total, exactShare, queriesUsed: qs.length, cap: ANCHOR_LIST_CAP, anchorsChecked: anchors.length,
+    warning: exactShare > EXACT_WARN_SHARE ? `${Math.round(exactShare * 100)}% of links use exact-match commercial anchors (above ${EXACT_WARN_SHARE * 100}%). Natural profiles are mostly brand and URL anchors; a high share of keyword anchors looks bought and can draw Google's link spam systems.` : null };
+}
+
+/** Brand names for a project: its name, domain, domain label and the brand terms in project settings. */
+function brandTermsOf(project) {
+  const domain = domainOf(project);
+  return [project.name, domain, domain.split(".")[0], ...String(projectSettings(project).brandTerms || "").split(",")].map((t) => String(t || "").trim()).filter(Boolean);
+}
+function topQueries(projectId) {
+  try { return all("SELECT query FROM gsc_queries WHERE project_id=? GROUP BY query ORDER BY SUM(clicks) DESC, SUM(impressions) DESC LIMIT 300", projectId).map((r) => r.query); }
+  catch { return []; } // no Search Console table
+}
+
 export function backlinksData(projectId) {
   const snaps = all("SELECT id, fetched_at, backlinks, ref_domains, rank, dofollow, spam_score FROM bl_snapshots WHERE project_id=? ORDER BY id", projectId);
   const last = snaps.at(-1);
   if (!last) return { snapshots: [] };
-  const data = JSON.parse(get("SELECT data FROM bl_snapshots WHERE id=?", last.id).data);
-  return { snapshots: snaps, last: { ...last, data }, spam: spamReview(data) };
+  const dataOf = (id) => JSON.parse(get("SELECT data FROM bl_snapshots WHERE id=?", id).data || "{}");
+  const data = dataOf(last.id), prev = snaps.at(-2);
+  const project = get("SELECT * FROM projects WHERE id=?", projectId);
+  return { snapshots: snaps, last: { ...last, data }, spam: spamReview(data),
+    diff: prev ? snapshotDiff({ ...prev, data: dataOf(prev.id) }, { ...last, data }) : null,
+    diffNote: prev ? null : "Referring domains gained and lost appear after the next fetch: the comparison needs two snapshots.",
+    anchorMix: anchorMix(data.anchors || [], { brandTerms: project ? brandTermsOf(project) : [], queries: topQueries(projectId) }) };
 }
 
 /** Google disavow file (domain: lines) for the flagged domains. Review before uploading. */
@@ -160,14 +225,21 @@ export function register({ routes }) {
     if (b.dfsLogin !== undefined) patch.dfsLogin = String(b.dfsLogin).slice(0, 200);
     if (b.dfsPassword !== undefined && b.dfsPassword !== "") patch.dfsPassword = String(b.dfsPassword).slice(0, 200);
     if (b.gscKeyFile !== undefined) patch.gscKeyFile = String(b.gscKeyFile).slice(0, 500);
+    // Chrome UX Report API key: write-only (empty = keep the saved one). Never returned, never logged.
+    if (b.cruxApiKey !== undefined && b.cruxApiKey !== "") {
+      const k = String(b.cruxApiKey).trim();
+      if (!/^[A-Za-z0-9_-]{20,100}$/.test(k)) fail(400, "That doesn't look like a Google API key (letters, digits, - and _, usually starting AIza).");
+      patch.cruxApiKey = k;
+    }
+    if (b.clearCruxKey === true) patch.cruxApiKey = "";
     if (b.dfsConfigPath !== undefined) {
       patch.dfsConfigPath = String(b.dfsConfigPath).trim().slice(0, 500);
       if (patch.dfsConfigPath && !existsSync(patch.dfsConfigPath)) fail(400, `File not found: ${patch.dfsConfigPath}`);
     }
     const c = saveConfig(patch);
-    return { dfsMonthlyBudget: c.dfsMonthlyBudget ?? 2, dfsLogin: c.dfsLogin || "", gscKeyFile: c.gscKeyFile || "", dfsConfigPath: c.dfsConfigPath || "" };
+    return { dfsMonthlyBudget: c.dfsMonthlyBudget ?? 2, dfsLogin: c.dfsLogin || "", gscKeyFile: c.gscKeyFile || "", dfsConfigPath: c.dfsConfigPath || "", hasCruxKey: Boolean(c.cruxApiKey) };
   }]);
-  routes.push(["GET", /^\/api\/config$/, () => { const c = config(); return { dfsMonthlyBudget: c.dfsMonthlyBudget ?? 2, dfsLogin: c.dfsLogin || "", hasPassword: Boolean(c.dfsPassword), gscKeyFile: c.gscKeyFile || "", dfsConfigPath: c.dfsConfigPath || "" }; }]);
+  routes.push(["GET", /^\/api\/config$/, () => { const c = config(); return { dfsMonthlyBudget: c.dfsMonthlyBudget ?? 2, dfsLogin: c.dfsLogin || "", hasPassword: Boolean(c.dfsPassword), gscKeyFile: c.gscKeyFile || "", dfsConfigPath: c.dfsConfigPath || "", hasCruxKey: Boolean(c.cruxApiKey) }; }]);
   routes.push(["GET", /^\/api\/projects\/(\d+)\/keywords$/, ([id]) => keywordsData(project(id).id)]);
   routes.push(["POST", /^\/api\/projects\/(\d+)\/keywords$/, ([id]) => fetchKeywords(project(id))]);
   routes.push(["GET", /^\/api\/projects\/(\d+)\/backlinks$/, ([id]) => backlinksData(project(id).id)]);

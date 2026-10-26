@@ -4,6 +4,7 @@
 import { db, all, get, run, projectSettings } from "./db.mjs";
 import { dfs, dfsConfigured } from "./dataforseo.mjs";
 import { emit } from "./runner.mjs";
+import { serpSnapshot } from "./serpfeatures.mjs";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS ai_prompts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -14,6 +15,8 @@ CREATE TABLE IF NOT EXISTS ai_results (run_id INTEGER NOT NULL REFERENCES ai_run
   present INTEGER, mentioned INTEGER, cited INTEGER, rank INTEGER, organic_pos INTEGER, local_pos INTEGER,
   sources TEXT, brands TEXT, excerpt TEXT, check_url TEXT, error TEXT);
 `);
+// SERP features snapshot (JSON) from the Google search already paid for; runs before 2026-10-26 have none.
+if (!db.prepare("PRAGMA table_info(ai_results)").all().some((c) => c.name === "serp")) db.exec("ALTER TABLE ai_results ADD COLUMN serp TEXT");
 
 export const PLATFORMS = {
   chatgpt: { label: "ChatGPT (web search)", cost: 0.004 },
@@ -85,7 +88,8 @@ async function checkGoogle(prompt, loc, b, pid) {
   return { present: aio ? 1 : 0, mentioned: aio && b.mentions(aio.markdown) ? 1 : 0, cited: refs.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: null,
     organic_pos: own ? own.rank_group : null, local_pos: packIdx >= 0 ? packIdx + 1 : null,
     sources: refs.length ? refs : organic.slice(0, 10).map((i) => ({ domain: host(i.domain), url: i.url, title: i.title, organic: true })),
-    brands: pack.map((p) => p.title).slice(0, 10), excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null };
+    brands: pack.map((p) => p.title).slice(0, 10), excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null,
+    serp: serpSnapshot(items, (d) => b.isOwn(d)) };
 }
 
 async function checkAiMode(prompt, loc, b, pid) {
@@ -199,17 +203,17 @@ function execute(project, runId, jobs, costBefore) {
   runningRuns.add(project.id);
   (async () => {
     let done = 0, stopped = null;
-    const ins = db.prepare(`INSERT INTO ai_results (run_id, prompt, platform, present, mentioned, cited, rank, organic_pos, local_pos, sources, brands, excerpt, check_url, error)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const ins = db.prepare(`INSERT INTO ai_results (run_id, prompt, platform, present, mentioned, cited, rank, organic_pos, local_pos, sources, brands, excerpt, check_url, error, serp)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const worker = async () => {
       while (jobs.length && !stopped) {
         const [prompt, pl] = jobs.shift();
         try {
           const x = await CHECK[pl](prompt, COUNTRY_LEVEL.has(pl) ? country : local, b, project.id);
-          ins.run(runId, prompt, pl, x.present, x.mentioned, x.cited, x.rank, x.organic_pos ?? null, x.local_pos ?? null, JSON.stringify(x.sources), JSON.stringify(x.brands), x.excerpt, x.check_url, null);
+          ins.run(runId, prompt, pl, x.present, x.mentioned, x.cited, x.rank, x.organic_pos ?? null, x.local_pos ?? null, JSON.stringify(x.sources), JSON.stringify(x.brands), x.excerpt, x.check_url, null, x.serp ? JSON.stringify(x.serp) : null);
         } catch (e) {
           if (e.status === 402) stopped = e.message; // budget reached: stop the whole run
-          ins.run(runId, prompt, pl, null, null, null, null, null, null, "[]", "[]", "", null, e.message.slice(0, 300));
+          ins.run(runId, prompt, pl, null, null, null, null, null, null, "[]", "[]", "", null, e.message.slice(0, 300), null);
         }
         done++;
         emit({ type: "phase", projectId: project.id, auditId: null, phase: `AI visibility ${done}/${total}` });

@@ -1,0 +1,16 @@
+{
+  "about": "Confirmed Google ranking updates and their start dates, used to label traffic drops on the Search trend card. Editable: add new updates as Google announces them (name, type core|spam|helpful|other, start YYYY-MM-DD). Only dates confirmed on Google's Search Status Dashboard belong here.",
+  "source": "https://status.search.google.com/products/rGHU1u87FJnkP6W2GwMi/history",
+  "updates": [
+    { "name": "March 2024 core update", "type": "core", "start": "2024-03-05" },
+    { "name": "March 2024 spam update", "type": "spam", "start": "2024-03-05" },
+    { "name": "June 2024 spam update", "type": "spam", "start": "2024-06-20" },
+    { "name": "August 2024 core update", "type": "core", "start": "2024-08-15" },
+    { "name": "November 2024 core update", "type": "core", "start": "2024-11-11" },
+    { "name": "December 2024 core update", "type": "core", "start": "2024-12-12" },
+    { "name": "December 2024 spam update", "type": "spam", "start": "2024-12-19" },
+    { "name": "March 2025 core update", "type": "core", "start": "2025-03-13" },
+    { "name": "June 2025 core update", "type": "core", "start": "2025-06-30" },
+    { "name": "August 2025 spam update", "type": "spam", "start": "2025-08-26" }
+  ]
+}

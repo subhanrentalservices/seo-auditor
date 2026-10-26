@@ -6,6 +6,7 @@ import os from "node:os";
 import { GoogleAuth } from "google-auth-library";
 import { db, all, get, run, ROOT, projectSettings, DATA } from "./db.mjs";
 import { afterAudit, phase } from "./runner.mjs";
+import { brandTerms, brandRegex } from "./trends.mjs";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS gsc_queries (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -16,6 +17,8 @@ CREATE TABLE IF NOT EXISTS gsc_daily (project_id INTEGER NOT NULL REFERENCES pro
 CREATE TABLE IF NOT EXISTS gsc_pages_past (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   period TEXT NOT NULL, url TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, start_date TEXT, end_date TEXT,
   PRIMARY KEY (project_id, period, url));
+CREATE TABLE IF NOT EXISTS gsc_trend (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  date TEXT NOT NULL, segment TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, PRIMARY KEY (project_id, date, segment));
 `);
 
 // Service-account key: App settings, else GSC_KEY_FILE, else ~/.config/claude-seo/gsc-service-account.json.
@@ -67,12 +70,24 @@ export async function refresh(project) {
   // (364 days back, so weekdays line up). Used by the content-decay report.
   const past = { prev: { startDate: iso(new Date(start - 28 * 864e5)), endDate: iso(new Date(start - 864e5)) },
     yoy: { startDate: iso(new Date(start - 364 * 864e5)), endDate: iso(new Date(end - 364 * 864e5)) } };
-  const [pages, queries, daily, prevPages, yoyPages] = await Promise.all([
+  // Search trend (trends.mjs): the full 16 months Search Console keeps, by device and brand vs non-brand. Four calls;
+  // if they fail the rest of the refresh still saves and the previous trend data is kept.
+  const hist = { startDate: iso(new Date(end - 485 * 864e5)), endDate: iso(end) };
+  const terms = brandTerms(project, s), brandRe = brandRegex(terms);
+  const byQuery = (operator) => [{ filters: [{ dimension: "query", operator, expression: brandRe }] }];
+  const trendCalls = Promise.all([
+    query(property, { ...hist, dimensions: ["date"] }),
+    query(property, { ...hist, dimensions: ["date", "device"] }),
+    brandRe ? query(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("includingRegex") }) : [],
+    brandRe ? query(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("excludingRegex") }) : [],
+  ]).catch((e) => ({ error: e.message }));
+  const [pages, queries, daily, prevPages, yoyPages, trend] = await Promise.all([
     query(property, { ...range, dimensions: ["page"] }),
     query(property, { ...range, dimensions: ["query", "page"] }, 50000),
     query(property, { startDate: iso(start90), endDate: iso(end), dimensions: ["date"] }),
     query(property, { ...past.prev, dimensions: ["page"] }),
     query(property, { ...past.yoy, dimensions: ["page"] }),
+    trendCalls,
   ]);
   db.exec("BEGIN");
   try {
@@ -88,10 +103,21 @@ export async function refresh(project) {
     const pp = db.prepare("INSERT OR REPLACE INTO gsc_pages_past (project_id,period,url,clicks,impressions,position,start_date,end_date) VALUES (?,?,?,?,?,?,?,?)");
     for (const [period, rows] of [["prev", prevPages], ["yoy", yoyPages]])
       for (const r of rows) pp.run(project.id, period, r.keys[0], r.clicks, r.impressions, r.position, past[period].startDate, past[period].endDate);
+    if (Array.isArray(trend)) {
+      run("DELETE FROM gsc_trend WHERE project_id=?", project.id);
+      const it = db.prepare("INSERT OR REPLACE INTO gsc_trend (project_id,date,segment,clicks,impressions,position) VALUES (?,?,?,?,?,?)");
+      const [tAll, tDevice, tBrand, tNon] = trend;
+      for (const r of tAll) it.run(project.id, r.keys[0], "all", r.clicks, r.impressions, r.position);
+      for (const r of tDevice) it.run(project.id, r.keys[0], String(r.keys[1]).toLowerCase(), r.clicks, r.impressions, r.position);
+      for (const r of tBrand) it.run(project.id, r.keys[0], "brand", r.clicks, r.impressions, r.position);
+      for (const r of tNon) it.run(project.id, r.keys[0], "nonbrand", r.clicks, r.impressions, r.position);
+    }
+    run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc-trend:${project.id}`,
+      JSON.stringify({ ...hist, terms, fetchedAt: new Date().toISOString(), error: Array.isArray(trend) ? null : trend.error }));
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc:${project.id}`, JSON.stringify({ property, fetchedAt: new Date().toISOString(), ...range }));
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
-  return { property, pages: pages.length, queries: queries.length, days: daily.length };
+  return { property, pages: pages.length, queries: queries.length, days: daily.length, trendDays: Array.isArray(trend) ? trend[0].length : 0 };
 }
 
 // Expected organic CTR by position on today's results pages (AI Overviews, local packs): the midpoint of 2026

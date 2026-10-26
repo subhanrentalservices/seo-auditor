@@ -120,6 +120,46 @@ async function alignCards(ctx) {
     d.pairs, { empty: "No two pages share most of their searches." }))];
 }
 
+// Search trend (src/trends.mjs): 16 months by week, brand vs non-brand, change on last year by month, drops explained.
+const SEG = { brand: "brand searches", nonbrand: "non-brand searches", mobile: "mobile", desktop: "desktop", tablet: "tablet" };
+const DROP_BADGE = { seasonal: "notice", "after a Google update": "warning", unexplained: "error" };
+const pctTxt = (p) => (p === null || p === undefined ? "–" : `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(Math.round(p * 100))}%`);
+const fmtWeek = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit", timeZone: "UTC" });
+const fmtMonth = (m) => new Date(m + "-01T00:00:00Z").toLocaleDateString("en-AU", { month: "short", year: "numeric", timeZone: "UTC" });
+async function trendCard(ctx) {
+  const d = await api(`/api/projects/${ctx.project.id}/trends`);
+  const card = (...kids) => h("div", { class: "card" }, h("h2", {}, "Search trend (16 months)"), ...kids);
+  if (!d.fetched) return card(h("p", { class: "hint" }, d.error ? `Could not fetch the trend: ${d.error}` : "Press Refresh above once: up to 16 months of daily data are fetched with the next Search Console refresh."));
+  const w = d.weekly, months = Math.max(1, Math.round(d.days / 30.4));
+  const inWeek = (r) => d.updates.filter((u) => u.start >= r.start && u.start <= r.end).map((u) => u.name);
+  const pts = (rows) => rows.map((r) => { const u = inWeek(r); return { x: fmtWeek(r.start), y: r.clicks, sub: `week from ${fmtWeek(r.start)} · ${num(r.impressions)} impressions${u.length ? ` · ${u.join(", ")}` : ""}` }; });
+  const chart = (title, rows) => h("div", {}, h("h3", {}, title), lineChart(pts(rows), { max: null, fmt: num, label: title }));
+  const split = w.brand?.length || w.nonbrand?.length;
+  const seg = (x) => (x ? `${SEG[x.segment]} (${Math.round(x.share * 100)}% of the loss)` : "–");
+  const change = (x) => h("span", { title: `${num(x.before)} → ${num(x.after)} ${x.metric} (7 days before vs 7 days from the start)` }, `−${Math.round(x.pct * 100)}% ${x.metric}`);
+  return card(
+    h("p", { class: "hint" }, `Daily Search Console totals since ${d.startDate} (${months} months; Google keeps 16), added up by week. `,
+      split ? `Brand searches are those matching: ${d.terms.join(", ")} (add more under Settings → Brand names). Brand and non-brand don't add up to the total: Google leaves rare searches out of query-level data. `
+        : "No brand split: the project name and domain are too short to tell brand searches apart; add names under Settings → Brand names. ",
+      d.error ? `The last refresh could not update this card (${d.error}); showing the previous data.` : ""),
+    split ? h("div", { class: "grid g2" }, chart("Non-brand clicks per week", w.nonbrand || []), chart("Brand clicks per week", w.brand || [])) : chart("Clicks per week", w.all),
+    h("p", { class: "small" }, "Confirmed Google updates in this period: ", d.updates.length ? d.updates.map((u) => `${u.name} (${fmtWeek(u.start)})`).join(" · ") : "none on the list",
+      ". Source: ", h("a", { href: d.source, target: "_blank", rel: "noopener" }, "Google Search Status Dashboard"), " (the list is src/google-updates.json; add new updates there)."),
+    h("h3", { style: { marginTop: "12px" } }, "Change on last year, by month"),
+    d.hasYoy ? table([{ label: "Month", get: (r) => `${fmtMonth(r.month)}${r.partial ? ` (${Number(r.from.slice(8))}–${Number(r.to.slice(8))})` : ""}` },
+      { label: "Clicks", num: true, get: (r) => num(r.clicks) }, { label: "Last year", num: true, get: (r) => num(r.lastYear.clicks) }, { label: "Change", num: true, get: (r) => pctTxt(r.clicksPct) },
+      { label: "Impr.", num: true, get: (r) => num(r.impressions) }, { label: "Last year", num: true, get: (r) => num(r.lastYear.impressions) }, { label: "Change", num: true, get: (r) => pctTxt(r.impressionsPct) }], [...d.yoy].reverse())
+      : h("p", { class: "small" }, `Less than a year of data (${months} months since the first impression), so there is no last year to compare with yet. Month-by-month change appears once the same month last year is in the data.`),
+    h("h3", { style: { marginTop: "12px" } }, `What changed (${d.drops.length})`),
+    h("p", { class: "hint" }, "Weeks with clicks (impressions when clicks are very few) at least 20% below the week before and below the same week last year. ",
+      "Seasonal: last year fell in the same weeks too. After a Google update: it starts within 5 days of a confirmed update's start; compare the pages that lost with the ones now above them. Unexplained: check tracking, indexing, outages and recent site changes first."),
+    table([{ label: "From", get: (r) => fmtWeek(r.start) }, { label: "Change", num: true, get: change },
+      { label: "Likely reason", get: (r) => h("span", {}, h("span", { class: `badge ${DROP_BADGE[r.label]}` }, r.label), r.update ? h("div", { class: "small" }, r.update.name) : null) },
+      { label: "Searches", get: (r) => h("span", { class: "small" }, seg(r.driver.query)) }, { label: "Device", get: (r) => h("span", { class: "small" }, seg(r.driver.device)) },
+      { label: "Last year", get: (r) => h("span", { class: "small" }, r.yearAgoNote || `${pctTxt(r.yearAgo.change)} in the same weeks`) }],
+    d.drops, { empty: "No drop of 20% or more in this period." }));
+}
+
 VIEWS.search = async (ctx) => {
   const d = await api(`/api/projects/${ctx.project.id}/gsc`);
   const btn = h("button", { class: "btn", onclick: () => gscRefresh(ctx, btn) }, d.connected ? "Refresh" : "Fetch now");
@@ -130,6 +170,7 @@ VIEWS.search = async (ctx) => {
   if (!d.connected) return [head, index];
   const decay = await decayCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Content decay"), h("p", { class: "hint" }, e.message)));
   const align = await alignCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Query-page alignment"), h("p", { class: "hint" }, e.message)));
+  const trend = await trendCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Search trend (16 months)"), h("p", { class: "hint" }, e.message)));
   const base = ctx.project.start_url, t = d.totals;
   const tile = (k, v) => h("div", { class: "card stat" }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
   return [head, index,
@@ -139,6 +180,7 @@ VIEWS.search = async (ctx) => {
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Clicks per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.clicks, sub: `${num(r.impressions)} impressions` })), { max: null, label: "Clicks per day" })),
       h("div", { class: "card" }, h("h2", {}, "Impressions per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.impressions, sub: `position ${pos(r.position)}` })), { max: null, fmt: num, label: "Impressions per day" }))),
+    trend,
     d.ctr ? h("div", { class: "card" }, h("h2", {}, "Why CTR is what it is"),
       h("p", { class: "hint" }, `${Math.round(d.ctr.deepShare * 100)}% of impressions come from position 21 or lower, where almost nobody clicks; there, CTR is a ranking problem, not a snippet problem. `,
         "Brand searches that are really for another business with a similar name also pull CTR down. Clicks on your Google Business Profile (calls, directions, website button) aren't counted here at all."),

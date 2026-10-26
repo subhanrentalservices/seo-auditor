@@ -9,7 +9,8 @@ const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "–");
 
 VIEWS.visibility = async (ctx) => {
   const pid = ctx.project.id;
-  const [d, st] = await Promise.all([api(`/api/projects/${pid}/visibility`), api("/api/dfs/status").catch(() => null)]);
+  const [d, st, sf] = await Promise.all([api(`/api/projects/${pid}/visibility`), api("/api/dfs/status").catch(() => null),
+    api(`/api/projects/${pid}/serp-features`).catch(() => null)]);
   const chosen = new Set(Object.keys(d.platforms));
   const est = h("span", { class: "small muted" });
   const updateEst = () => { const per = [...chosen].reduce((t, k) => t + d.platforms[k].cost, 0); est.textContent = `${d.prompts.length} prompts × ${chosen.size} platforms ≈ $${(per * d.prompts.length).toFixed(3)}`; };
@@ -82,6 +83,7 @@ VIEWS.visibility = async (ctx) => {
   return [head,
     h("div", { class: `grid g${Math.min(tiles.length, 3) || 1}` }, tiles),
     h("div", { class: "card" }, h("h2", {}, `Results · ${new Date(d.last.started_at + "Z").toLocaleString("en-AU")} · cost $${(d.last.cost || 0).toFixed(3)}`), h("p", { class: "small muted" }, "Click a cell to read the answer and its sources."), matrix),
+    serpCard(sf),
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Who AI cites (share of voice)"), h("p", { class: "small muted" }, "Domains cited across all AI answers in this run. These sites are what AI trusts for your prompts."),
         table([{ label: "Domain", get: (r) => (r.own ? h("b", {}, r.domain + " (you)") : r.domain) }, { label: "Answers", num: true, key: "answers" }, { label: "Share", num: true, get: (r) => `${Math.round(r.share * 100)}%` }], d.shareOfVoice, { empty: "No citations recorded." })),
@@ -90,6 +92,31 @@ VIEWS.visibility = async (ctx) => {
         { label: "Cost", num: true, get: (r) => `$${(r.cost || 0).toFixed(3)}` }], hist.slice().reverse()), h("p", { class: "small muted" }, "Per platform: mentioned / cited."))),
     prompts];
 };
+
+// Search results features: read from the Google searches the run already paid for (no extra cost).
+function serpCard(sf) {
+  if (!sf?.run) return null;
+  const when = new Date(sf.run.started_at + "Z").toLocaleDateString("en-AU");
+  const card = h("div", { class: "card" }, h("h2", {}, "Search results features"),
+    h("p", { class: "hint" }, `What Google showed for each prompt in the run of ${when} (from the Google searches already paid for; no extra cost), and where your ranking page could do more.`));
+  if (!sf.withData) {
+    card.append(h("p", { class: "muted" }, "This run was made before search results features were recorded, so there is nothing to show yet. The next run that includes Google records them at no extra cost."));
+    return card;
+  }
+  if (sf.withData < sf.googleRows) card.append(h("p", { class: "small muted" }, `${sf.withData} of ${sf.googleRows} Google searches in this run have feature data.`));
+  card.append(h("div", { class: "row", style: { flexWrap: "wrap", gap: "8px", margin: "4px 0 12px" } },
+    sf.features.length ? sf.features.map((f) => h("div", { class: "stat", style: { minWidth: "120px" } }, h("div", { class: "k" }, f.label),
+      h("div", { class: "v", style: { fontSize: "20px" } }, `${f.prompts}`), h("div", { class: "d muted" }, `of ${sf.withData} prompts`)))
+      : h("span", { class: "muted small" }, "Only plain results: no features shown.")));
+  const page = (u) => (u ? h("a", { href: u, target: "_blank", rel: "noopener" }, (() => { try { return new URL(u).pathname; } catch { return u; } })()) : h("span", { class: "muted" }, "not ranking"));
+  card.append(h("h3", { style: { margin: "4px 0 8px" } }, `SERP opportunities (${sf.opportunities.length})`),
+    sf.auditId ? null : h("p", { class: "small muted" }, "No finished audit for this project: run one to compare headings, videos and page type."),
+    table([{ label: "Prompt", key: "prompt" }, { label: "Opportunity", get: (o) => h("span", { class: o.unknown ? "muted" : "" }, o.label) },
+      { label: "Detail", get: (o) => h("span", { class: "small" }, o.detail) },
+      { label: "Our page", get: (o) => [page(o.url), o.position ? h("span", { class: "muted small" }, ` #${o.position}`) : null] }],
+    sf.opportunities, { empty: "No opportunities found: no snippet held by others while you rank, no unanswered questions, video or page-type gaps." }));
+  return card;
+}
 
 function answerDrawer(ctx, r) {
   ctx.app.openDrawer(h("h2", { style: { paddingRight: "90px" } }, r.prompt), h("p", { class: "small muted" }, r.platform, r.check_url ? [" · ", h("a", { href: r.check_url, target: "_blank", rel: "noopener" }, "open the live result")] : null),

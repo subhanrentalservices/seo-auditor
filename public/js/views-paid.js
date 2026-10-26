@@ -72,6 +72,7 @@ VIEWS.backlinks = async (ctx) => {
         h("p", { class: "hint" }, "Google ignores most spam links on its own, so this usually does no harm. Use the disavow file only if Search Console shows a manual action, or rankings drop while the spam keeps growing. Links bought from \u201cfree high-DR backlink\u201d lists look exactly like these."),
         s.spamAnchors.length ? h("details", {}, h("summary", { class: "small" }, "Spam anchors found"), h("ul", { class: "small" }, s.spamAnchors.map((a) => h("li", {}, a)))) : null]
         : h("p", { class: "up" }, "✓ No spam pattern found in the links checked.")),
+    h("div", { class: "grid g2" }, diffCard(d), mixCard(d.anchorMix)),
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Referring domains (by authority)"), table([{ label: "Domain", key: "domain" }, { label: "Rank", num: true, get: (r) => r.rank ?? "–" },
         { label: "Links", num: true, get: (r) => num(r.backlinks) }, { label: "Spam", num: true, get: (r) => r.spam ?? "–" },
@@ -84,6 +85,37 @@ VIEWS.backlinks = async (ctx) => {
       h("div", { class: "card" }, h("h2", {}, "Link types"), table([{ label: "Type", key: "k" }, { label: "Links", num: true, get: (r) => num(r.v) }], top(x.types))))];
 };
 
+/** "Gained / lost since <date>": referring domains that came and went between the last two snapshots (stored data). */
+function diffCard(d) {
+  const x = d.diff;
+  if (!x) return h("div", { class: "card" }, h("h2", {}, "Gained / lost"), h("p", { class: "muted" }, d.diffNote));
+  const signed = (v) => (v === null || v === undefined ? "–" : `${v >= 0 ? "+" : ""}${num(v)}`);
+  const list = (rows, gained) => (rows.length
+    ? h("ul", { class: "small", style: { margin: 0, paddingLeft: "18px" } }, rows.map((r) => h("li", {}, r.domain, h("span", { class: "muted" }, ` · rank ${r.rank ?? "–"}`),
+      gained && x.newSpam.includes(r.domain) ? h("span", { class: "badge error", style: { marginLeft: "6px" } }, `spam ${r.spam}`) : null)))
+    : h("p", { class: "small muted" }, "None."));
+  return h("div", { class: "card" }, h("h2", {}, `Gained / lost since ${new Date(x.since + "Z").toLocaleDateString("en-AU")}`),
+    h("p", { class: "small" }, `Backlinks ${signed(x.totals.backlinks)} · referring domains ${signed(x.totals.ref_domains)} · dofollow ${signed(x.totals.dofollow)} · spam score ${signed(x.totals.spam_score)}`),
+    x.newSpam.length ? h("p", { class: "down" }, `✕ ${x.newSpam.length} new referring domain${x.newSpam.length > 1 ? "s have" : " has"} a spam score of 60 or more.`) : null,
+    h("div", { class: "grid g2" },
+      h("div", {}, h("h3", { style: { margin: "0 0 6px" } }, `Gained (${x.gained.length})`), list(x.gained, true)),
+      h("div", {}, h("h3", { style: { margin: "0 0 6px" } }, `Lost (${x.lost.length})`), list(x.lost, false))),
+    x.note ? h("p", { class: "hint", style: { marginBottom: 0 } }, x.note) : null);
+}
+
+/** Anchor mix by type (brand, naked URL, generic, exact-match commercial, other), weighted by links. */
+function mixCard(m) {
+  if (!m) return null;
+  const bar = (share) => h("div", { style: { background: "var(--line-2, #d3d7dd)", borderRadius: "3px", height: "6px", minWidth: "60px" } },
+    h("div", { style: { background: "var(--ink-3, #757c88)", borderRadius: "3px", height: "6px", width: `${Math.round(share * 100)}%` } }));
+  return h("div", { class: "card" }, h("h2", {}, "Anchor mix"),
+    m.warning ? h("p", { class: "down" }, "! " + m.warning) : null,
+    table([{ label: "Type", key: "label" }, { label: "Links", num: true, get: (r) => num(r.backlinks) }, { label: "Share", num: true, get: (r) => `${Math.round(r.share * 100)}%` },
+      { label: "", get: (r) => bar(r.share) }, { label: "Examples", get: (r) => h("span", { class: "small muted" }, r.anchors.join(" · ")) }], m.types),
+    h("p", { class: "hint", style: { marginBottom: 0 } }, `From the top ${m.cap} anchors by links (${m.anchorsChecked} stored). Brand = project name, domain or brand names in project settings. `
+      + (m.queriesUsed ? `Exact-match = the anchor is one of your top ${m.queriesUsed} non-brand Search Console queries; above 20% of links looks unnatural.` : "Connect Search Console to spot exact-match commercial anchors.")));
+}
+
 // ---------- App settings (global, route #/app) ----------
 VIEWS.app = async () => {
   const [c, st] = await Promise.all([api("/api/config"), api("/api/dfs/status").catch((e) => ({ error: e.message }))]);
@@ -92,9 +124,15 @@ VIEWS.app = async () => {
   const passIn = h("input", { type: "password", placeholder: c.hasPassword ? "saved — type to replace" : "", autocomplete: "new-password" });
   const keyIn = h("input", { type: "text", value: c.gscKeyFile, placeholder: "~/.config/claude-seo/gsc-service-account.json" });
   const mcpIn = h("input", { type: "text", value: c.dfsConfigPath || "", placeholder: "optional: path to an .mcp.json with DataForSEO" });
+  const cruxIn = h("input", { type: "password", placeholder: c.hasCruxKey ? "saved — type to replace" : "AIza…", autocomplete: "off" });
+  const cruxClear = c.hasCruxKey ? h("button", { type: "button", class: "btn sm", style: { marginTop: "4px" }, onclick: async () => {
+    try { await api("/api/config", { method: "PUT", body: { clearCruxKey: true } }); toast("Chrome UX Report key removed"); cruxIn.placeholder = "AIza…"; cruxClear.remove(); }
+    catch (err) { toast(err.message); }
+  } }, "Remove key") : null;
   const save = async (e) => {
     e.preventDefault();
-    try { await api("/api/config", { method: "PUT", body: { dfsMonthlyBudget: Number(budgetIn.value), dfsLogin: loginIn.value, dfsPassword: passIn.value, gscKeyFile: keyIn.value, dfsConfigPath: mcpIn.value } }); toast("Saved"); passIn.value = ""; }
+    try { const r = await api("/api/config", { method: "PUT", body: { dfsMonthlyBudget: Number(budgetIn.value), dfsLogin: loginIn.value, dfsPassword: passIn.value, gscKeyFile: keyIn.value, dfsConfigPath: mcpIn.value, cruxApiKey: cruxIn.value } });
+      toast("Saved"); passIn.value = ""; cruxIn.value = ""; if (r.hasCruxKey) cruxIn.placeholder = "saved — type to replace"; }
     catch (err) { toast(err.message); }
   };
   const row = (l, el, hint) => [h("label", {}, l), h("div", {}, el, hint ? h("div", { class: "small muted" }, hint) : null)];
@@ -111,6 +149,7 @@ VIEWS.app = async () => {
       ...row("DataForSEO login", loginIn, `Now using: ${st.source || "–"}`), ...row("DataForSEO password", passIn, "Stored only in data/config.json on this PC."),
       ...row("DataForSEO .mcp.json file", mcpIn, "Instead of a login above: an MCP config whose dataforseo server has the login. Read where it is, never copied."),
       ...row("Search Console key file", keyIn, "Service-account JSON. Read where it is, never copied."),
+      ...row("Chrome UX Report API key", h("div", {}, cruxIn, cruxClear), "Free field data (real Chrome users) for the Performance screen. Google Cloud console → enable “Chrome UX Report API” → Credentials → Create API key. Stored only in data/config.json on this PC; never shown again."),
       h("div", { class: "full" }, h("button", { class: "btn primary" }, "Save")))),
     h("div", { class: "card" }, h("h2", {}, "DataForSEO usage"),
       st.error ? h("p", { class: "down" }, st.error) : h("p", {}, `This month: $${(st.spent || 0).toFixed(3)} of $${(st.budget || 0).toFixed(2)} · balance ${typeof st.balance === "number" ? "$" + st.balance.toFixed(2) : "–"}`),

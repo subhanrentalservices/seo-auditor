@@ -12,7 +12,7 @@ import { joinCompounds } from "./topics.mjs";
 
 const norm = (s) => String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^a-z0-9&]+/g, " ").trim();
 // One key per page: www, trailing slash and index.html don't make a different page.
-const urlKey = (u) => { try { const x = new URL(u); return (x.host.replace(/^www\./, "") + x.pathname.replace(/\/index\.html?$/, "/").replace(/(.)\/$/, "$1")).toLowerCase(); } catch { return String(u); } };
+export const urlKey = (u) => { try { const x = new URL(u); return (x.host.replace(/^www\./, "") + x.pathname.replace(/\/index\.html?$/, "/").replace(/(.)\/$/, "$1")).toLowerCase(); } catch { return String(u); } };
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const sum = (rs, k = "impressions") => rs.reduce((n, r) => n + (r[k] || 0), 0);
 const wpos = (rs) => { const i = sum(rs); return i ? rs.reduce((n, r) => n + (r.position || 0) * r.impressions, 0) / i : null; };

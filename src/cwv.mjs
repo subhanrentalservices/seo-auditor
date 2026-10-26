@@ -5,6 +5,7 @@ import lighthouse from "lighthouse";
 import * as chromeLauncher from "chrome-launcher";
 import { all, get, run } from "./db.mjs";
 import { afterAudit, phase } from "./runner.mjs";
+import { register as registerCrux } from "./crux.mjs";
 
 export const THRESHOLDS = { lcp_ms: [2500, 4000], cls: [0.1, 0.25], tbt_ms: [200, 600], fcp_ms: [1800, 3000] };
 const CATEGORIES = ["performance", "accessibility", "best-practices", "seo"];
@@ -141,4 +142,5 @@ export function register({ routes }) {
     runCwv(a.id, project, JSON.parse(a.settings || "{}"), n).catch((e) => console.error("lighthouse:", e.message)).finally(() => { busy = false; phase(project.id, a.id, null); });
     return { started: true };
   }]);
+  registerCrux({ routes }); // field data (CrUX) after Lighthouse: its after-audit hook runs after the one above
 }
