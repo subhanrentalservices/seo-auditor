@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_audit ON issues(audit_id, check_id);
 // Additive migrations for databases created by older versions.
 for (const [table, col, type] of [["audits", "ai_readiness", "INTEGER"], ["audits", "site_info", "TEXT"],
   ["cwv", "fcp_ms", "INTEGER"], ["cwv", "si_ms", "INTEGER"], ["cwv", "perf", "INTEGER"], ["cwv", "a11y", "INTEGER"], ["cwv", "bp", "INTEGER"],
-  ["cwv", "seo", "INTEGER"], ["cwv", "details", "TEXT"], ["cwv", "error", "TEXT"], ["links", "placement", "TEXT"]]) {
+  ["cwv", "seo", "INTEGER"], ["cwv", "details", "TEXT"], ["cwv", "error", "TEXT"], ["links", "placement", "TEXT"], ["links", "rel", "TEXT"]]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
 }

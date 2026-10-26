@@ -12,6 +12,9 @@ import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } fro
 import { conversionIssues } from "./conversion.mjs";
 import { robotsDirectives, applyHeaderRobots, canonicalHrefProblem, linkHeaderCanonical, textFingerprint, canonicalSiteIssues, soft404Issues } from "./google-signals.mjs";
 import { loadSitemaps } from "./sitemaps.mjs";
+import { rawRenderedDiff, renderPage, renderFindings, mergeRender, jsRedirectOf } from "./render-checks.mjs";
+import { uncrawlableLinks, anchorOf, ugcLinks, anchorFindings, linkSiteIssues, urlVariantIssues } from "./link-signals.mjs";
+export { rawRenderedDiff };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
@@ -52,18 +55,6 @@ export function robotsChangeIssues(projectId, auditId, status, body, origin) {
   if (!prev || !robotsUsable(prev.status) || !robotsUsable(status)) return [];
   const pages = all("SELECT url, final_url FROM pages WHERE audit_id=? AND status=200 AND indexable=1", prev.id).flatMap((p) => [p.url, p.final_url || p.url]);
   return robotsDiff(prev.status === 200 ? prev.body : "", status === 200 ? body : "", pages, origin, prev.id);
-}
-
-/** Differences between the raw HTML and the rendered DOM that matter to Google (both are parseHtml results). */
-export function rawRenderedDiff(raw, ren) {
-  const out = [];
-  if (raw.data.noindex && !ren.data.noindex) out.push("noindex in the raw HTML is removed by JavaScript (Google may skip rendering, so the page can stay out of the index)");
-  else if (!raw.data.noindex && ren.data.noindex) out.push("JavaScript adds noindex that isn't in the raw HTML");
-  else if (raw.robotsMeta !== ren.robotsMeta) out.push(`robots meta "${raw.robotsMeta || "(none)"}" in raw HTML, "${ren.robotsMeta || "(none)"}" after rendering`);
-  // A canonical set only by JavaScript is allowed (JavaScript SEO basics); changing or removing the HTML one is not.
-  if (raw.canonical && raw.canonical !== ren.canonical) out.push(ren.canonical ? `canonical ${raw.canonical} in raw HTML, ${ren.canonical} after rendering` : `canonical ${raw.canonical} removed by JavaScript`);
-  if (ren.words >= 200 && raw.words < ren.words * 0.2) out.push(`main text only after rendering: ${raw.words} words in raw HTML, ${ren.words} rendered`);
-  return out.join("; ");
 }
 
 async function fetchOnce(url, ua, method = "GET", timeout = 20000) {
@@ -147,8 +138,7 @@ export function parseHtml(html, url) {
   if (rd.nofollow) d.nofollowMeta = true;
   const refresh = $("meta[http-equiv]").filter((_, e) => /^refresh$/i.test($(e).attr("http-equiv"))).attr("content");
   if (refresh && /url\s*=/i.test(refresh)) d.metaRefresh = refresh.slice(0, 120);
-  const JSNAV = /(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\(|window\.open\()\s*['"]([^'"]+)/i;
-  const jsNav = $("[onclick], a[href^='javascript:' i]").map((_, e) => ($(e).attr("onclick") || $(e).attr("href") || "").match(JSNAV)?.[1]).get().filter(Boolean);
+  const jsNav = uncrawlableLinks($); // also <a> without href, #! routes, role="link" / data-href elements
   if (jsNav.length) { d.jsLinks = jsNav.length; d.jsLinkExample = jsNav[0].slice(0, 80); }
   // Possible back-button hijacking in the page's own inline scripts (Google spam policies, Apr 2026).
   $("script:not([src])").each((k, e) => {
@@ -226,8 +216,15 @@ export function parseHtml(html, url) {
     if (!href || /^(mailto|tel|javascript|sms|#)/i.test(href.trim())) return;
     const to = normalize(href, url);
     const template = (hasMain && !$(a).closest("main").length) || $(a).closest("header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]").length > 0;
-    if (to) links.push({ to, anchor: $(a).text().replace(/\s+/g, " ").trim().slice(0, 120), nofollow: /nofollow/i.test($(a).attr("rel") || ""), placement: template ? "nav" : "content" });
+    const rel = ($(a).attr("rel") || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (to) links.push({ to, ...anchorOf($, a), nofollow: /nofollow/i.test(rel), ...(rel ? { rel } : {}), placement: template ? "nav" : "content" });
   });
+  const ugc = ugcLinks($, url);
+  if (ugc.n) { d.ugcUnqualified = ugc.n; d.ugcExample = ugc.example; }
+  // Files the page needs to render: same-site ones are status-checked (broken_internal_resource).
+  const res = new Set([...$("script[src]").map((_, e) => $(e).attr("src")).get(),
+    ...$("link[href]").filter((_, e) => /\b(stylesheet|preload|modulepreload)\b/i.test($(e).attr("rel") || "")).map((_, e) => $(e).attr("href")).get()]);
+  $("style").each((_, e) => { for (const m of $(e).text().matchAll(/url\(\s*['"]?([^'")]+\.(?:woff2?|ttf|otf|eot)(?:[?#][^'")]*)?)['"]?\s*\)/gi)) res.add(m[1]); });
   // images
   const imgs = [];
   $("img").each((_, i) => {
@@ -346,7 +343,7 @@ export function parseHtml(html, url) {
     title: $("title").first().text().replace(/\s+/g, " ").trim(),
     description: ($('meta[name="description"]').attr("content") || "").trim(),
     h1: $("h1").first().text().replace(/\s+/g, " ").trim(),
-    canonical, links, imgs, words, text,
+    canonical, links, imgs, words, text, res: [...res].map((x) => normalize(x.trim(), url)).filter(Boolean),
     robotsMeta: robotsMeta.trim().toLowerCase().replace(/\s+/g, " "),
     textHash: words > 50 ? createHash("md5").update(text.toLowerCase()).digest("hex") : null,
     data: d,
@@ -364,12 +361,6 @@ async function browserStatus(browser, url) {
     if (/just a moment|attention required|access denied|forbidden|are you a robot|captcha|request blocked/.test(title)) return status >= 400 ? status : 403;
     return status;
   } catch { return 0; } finally { await page.close(); }
-}
-
-async function renderPage(browser, url, ua) {
-  const page = await browser.newPage({ userAgent: ua });
-  try { await page.goto(url, { waitUntil: "networkidle", timeout: 45000 }); return await page.content(); }
-  catch { return null; } finally { await page.close(); }
 }
 
 async function pool(n, items, fn, shouldStop) {
@@ -393,6 +384,12 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const robotsTxt = robotsRes.status === 200 ? robotsRes.body : "";
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
     saveRobots(auditId, robotsRes.status, robotsTxt);
+    // robots.txt of the hosts rendered pages load files from (same site only; up to 10 hosts, fetched once each).
+    const robotsByOrigin = new Map([[origin, Promise.resolve(robotsTxt ? robots : null)]]);
+    const robotsFor = (o) => {
+      if (!robotsByOrigin.has(o) && robotsByOrigin.size < 10) robotsByOrigin.set(o, fetchOnce(o + "/robots.txt", ua, "GET", 10000).then((x) => (x.status === 200 && x.body ? robotsParser(o + "/robots.txt", x.body) : null)));
+      return robotsByOrigin.get(o) || Promise.resolve(null);
+    };
     let home = null; // the start page's raw HTML, for the favicon and script checks
     const sitemap = await loadSitemaps(origin, robotsTxt, ua, { normalize });
     const llms = await fetchOnce(origin + "/llms.txt", ua, "GET");
@@ -403,10 +400,10 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const u of sitemap.urls) if (u && inScope(u) && !seen.has(u)) { seen.set(u, null); queue.push(u); }
     const insPage = db.prepare(`INSERT OR REPLACE INTO pages (audit_id,url,final_url,status,depth,content_type,response_ms,bytes,title,description,h1,canonical,indexable,in_sitemap,outlinks,words,text_ratio,data)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    const insLink = db.prepare("INSERT INTO links (audit_id,from_url,to_url,anchor,internal,nofollow,kind,placement) VALUES (?,?,?,?,?,?,?,?)");
+    const insLink = db.prepare("INSERT INTO links (audit_id,from_url,to_url,anchor,internal,nofollow,kind,placement,rel) VALUES (?,?,?,?,?,?,?,?,?)");
     const insText = db.prepare("INSERT OR REPLACE INTO page_text (audit_id, url, text) VALUES (?,?,?)"); // for link suggestions (I4)
     const hashes = new Map();
-    const imgSet = new Set(); const extSet = new Set();
+    const imgSet = new Set(); const extSet = new Set(); const resSet = new Set();
     let crawled = 0, started = 0; // started: reserves slots so parallel workers respect maxPages
 
     while (queue.length && !ctl.stop) {
@@ -420,19 +417,26 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         const r = await fetchFollow(url, ua);
         const final = r.finalUrl;
         let html = r.body;
-        let jsWordsRaw = null, raw = null;
+        let jsWordsRaw = null, raw = null, rawParse = null, rendered = null;
         if (browser && r.status === 200 && /html/.test(r.type)) {
-          const rawParse = parseHtml(html, final);
-          const rendered = await renderPage(browser, final, ua);
-          if (rendered) { jsWordsRaw = rawParse.words; raw = rawParse; html = rendered; }
+          rawParse = parseHtml(html, final);
+          rendered = await renderPage(browser, final, ua);
+          // After a JavaScript redirect the rendered DOM is another URL's page (crawled on its own): keep the raw HTML.
+          if (rendered?.html && !jsRedirectOf(final, rendered, rawParse.data.metaRefresh)) { jsWordsRaw = rawParse.words; raw = rawParse; html = rendered.html; }
         }
         const isHtml = /html/.test(r.type) && r.status === 200;
-        const p = isHtml ? parseHtml(html, final) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], words: 0, text: "", data: {} };
+        const p = isHtml ? parseHtml(html, final) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], res: [], words: 0, text: "", data: {} };
         const d = { ...p.data, redirect: r.redirect || undefined, error: r.error };
         if (isHtml) {
           const hc = headClosedEarly(r.body); // always the raw source: a rendered DOM has already been repaired
           if (hc) d.headClosedEarly = hc;
-          if (raw) { const diff = rawRenderedDiff(raw, p); if (diff) d.rawVsRendered = diff; }
+          const found = rendered && await renderFindings({ fetched: final, render: rendered, robotsFor, metaRefresh: Boolean(rawParse.data.metaRefresh),
+            words: { raw: rawParse.words, rendered: raw ? p.words : null } }).catch(() => null);
+          mergeRender(d, raw, p, final, found); // raw vs rendered, render log: blocked files, errors, JavaScript redirect
+          for (const u of found?.renderFailed || []) if (!p.res.includes(u)) p.res.push(u);
+          // Google follows a JavaScript redirect after rendering: crawl the target like a linked page.
+          const to = d.jsRedirect?.to && normalize(d.jsRedirect.to);
+          if (to && inScope(to) && !seen.has(to)) { seen.set(to, (depth ?? 0) + 1); queue.push(to); }
           if (url === start) home = { html: r.body, url: final };
         }
         applyHeaderRobots(d, r.headers.get("x-robots-tag") || ""); // only googlebot: or unscoped header lines count
@@ -452,7 +456,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         let internalOut = 0, extLinks = 0, extNofollow = 0, nofollowInternal = 0;
         for (const l of p.links) {
           const internal = inScope(l.to);
-          insLink.run(auditId, final, l.to, l.anchor, internal ? 1 : 0, l.nofollow ? 1 : 0, "a", l.placement);
+          insLink.run(auditId, final, l.to, l.anchor, internal ? 1 : 0, l.nofollow ? 1 : 0, "a", l.placement, l.rel || null);
           if (internal) {
             internalOut++; if (l.nofollow) nofollowInternal++;
             if (!seen.has(l.to) && /^https?:/.test(l.to) && !/\.(pdf|jpe?g|png|gif|webp|svg|zip|mp4|mp3|docx?|xlsx?)$/i.test(new URL(l.to).pathname)) {
@@ -460,8 +464,9 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
             } else if (seen.get(l.to) === null) seen.set(l.to, (depth ?? 0) + 1);
           } else { extLinks++; if (l.nofollow) extNofollow++; extSet.add(l.to); }
         }
-        for (const im of p.imgs) { insLink.run(auditId, final, im, "", inScope(im) ? 1 : 0, 0, "img", null); if (inScope(im)) imgSet.add(im); }
-        Object.assign(d, { nofollowInternal, externalLinks: extLinks, externalNofollow: extNofollow });
+        for (const im of p.imgs) { insLink.run(auditId, final, im, "", inScope(im) ? 1 : 0, 0, "img", null, null); if (inScope(im)) imgSet.add(im); }
+        for (const u of p.res) if (inScope(u)) { insLink.run(auditId, final, u, "", 1, 0, "res", null, null); resSet.add(u); } // scripts, styles, fonts
+        Object.assign(d, { nofollowInternal, externalLinks: extLinks, externalNofollow: extNofollow }, anchorFindings(p.links, inScope));
         if (p.textHash && indexable) { const prev = hashes.get(p.textHash); if (prev) d.dupOf = prev; else hashes.set(p.textHash, url); }
         insPage.run(auditId, url, final, r.status, depth, r.type.split(";")[0], r.ms, bytes, p.title, p.description, p.h1, p.canonical, indexable,
           sitemap.urls.has(url) || sitemap.urls.has(final) ? 1 : 0, p.links.length, p.words, ratio, JSON.stringify(d));
@@ -487,6 +492,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       return out;
     };
     const imgStatus = await checkStatus(imgSet, 20000);
+    const resStatus = await checkStatus(resSet, 5000);
     const extStatus = settings.checkExternalLinks ? await checkStatus(extSet, 5000) : new Map();
     const refused = [...extStatus].filter(([, s]) => [401, 403, 429].includes(s)).map(([u]) => u).slice(0, 40);
     if (refused.length && !ctl.stop) {
@@ -497,7 +503,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       } catch { /* no browser on this computer: keep the refused status */ }
       finally { if (b && b !== browser) await b.close().catch(() => {}); }
     }
-    const sOf = (u) => statusOf.get(u) ?? imgStatus.get(u) ?? extStatus.get(u);
+    const sOf = (u) => statusOf.get(u) ?? imgStatus.get(u) ?? resStatus.get(u) ?? extStatus.get(u);
 
     // Click depth = shortest link path from the start page (sitemap-seeded pages may be crawled before a link to them is seen).
     {
@@ -565,6 +571,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       const s = sOf(l.to_url);
       if (!s || s < 400) continue;
       if (l.kind === "img" && l.internal) raise("broken_internal_image", l.from_url, `${l.to_url} → ${s}`);
+      else if (l.kind === "res") { if (![401, 403, 429].includes(s)) raise("broken_internal_resource", l.from_url, `${l.to_url} → ${s}`); } // still refused after the retries: a bot wall, not a broken file
       else if (l.kind === "a" && l.internal) raise("broken_internal_link", l.from_url, `${l.to_url} → ${s}`);
       else if (l.kind === "a") raise([401, 403, 429].includes(s) ? "external_link_blocked" : "broken_external_link", l.from_url, `${l.to_url} → ${s}`);
     }
@@ -592,6 +599,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [id, u, det] of [...crawlSite, ...robotsChanges, ...favicon, ...homeScripts, ...blockedChecks, ...sitemap.problems]) raise(id, u, det);
     for (const [id, u, det] of [...canonicalSiteIssues(pages, start), ...soft404Issues(pages, { start, notFoundHash })]) raise(id, u, det);
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
+    const aLinks = db.prepare("SELECT DISTINCT from_url,to_url,internal,nofollow,rel FROM links WHERE audit_id=? AND kind='a'").iterate(auditId);
+    for (const [id, u, det] of [...linkSiteIssues(aLinks, { pages, redirOf, inScope, robots: robotsTxt ? robots : null, auditDate: ctx.auditDate }), ...urlVariantIssues(pages)]) raise(id, u, det);
     db.exec("COMMIT");
 
     // ---- totals and health ----
