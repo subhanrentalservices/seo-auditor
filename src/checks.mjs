@@ -1,5 +1,6 @@
 // Issue catalog (Semrush-style errors / warnings / notices) and the rules that raise them.
 // Page rules run per crawled page; site rules run once the crawl is complete.
+import { isArticle } from "./conversion.mjs";
 
 export const CHECKS = {
   // ---------------- Errors ----------------
@@ -69,6 +70,16 @@ export const CHECKS = {
   article_no_money_link: ["notice", "Article doesn't link to a money page", "Articles earn most of a site's links and readers; with no link from the text to a service, product or pricing page, neither reaches the pages that convert.", "Add a link in the text to the page that solves the reader's problem (service, product, feature or pricing), with a descriptive anchor."],
   sitemap_lastmod_uniform: ["notice", "Most sitemap URLs share one lastmod date", "Google and Bing use lastmod only when it is consistently accurate; a bulk date looks like a site-wide reset.", "Set each URL's lastmod to the date its content last really changed."],
 
+  // ---------------- Content age, structure and video ----------------
+  content_stale: ["notice", "Article not updated in over 12 months", "The newest date this article states is more than a year before the audit. Facts, prices, laws and screenshots go out of date, and readers and AI answers prefer current information. Age alone is not a ranking penalty.", "Review the article: correct what changed, add what's new, then update the visible date and dateModified. Don't change the date without changing the content."],
+  title_past_year: ["notice", "Title or H1 mentions a past year", "A past year in the headline (\"… 2024\") makes the page look out of date in search results and lowers clicks.", "If the content is current, update the year or remove it; if the page is about that year on purpose (history, a past event), ignore this notice."],
+  heading_skip: ["notice", "Heading levels skipped", "Headings are the page's outline for screen readers and crawlers; jumping from H2 to H4 leaves a gap in it.", "Use the next level down for sub-sections (H2 → H3 → H4). Change the styling with CSS, not the heading level."],
+  heading_before_h1: ["notice", "Headings before the H1", "The H1 should open the page's content; headings above it make the outline start with something else.", "Move the H1 above the other content headings, or turn the earlier ones into plain text if they are labels."],
+  long_no_toc: ["notice", "Long page without jump links (table of contents)", "On a long page with many sections, links to each section help readers find their answer, and Google can show them as \"jump to\" links in results.", "Add a short contents list near the top linking to each H2 (give each H2 an id, link with href=\"#id\")."],
+  long_paragraphs: ["notice", "Very long paragraphs (over 180 words)", "Walls of text are hard to read, especially on phones, and readers leave before reaching the answer.", "Split them into paragraphs of one idea each; use lists or sub-headings where they help."],
+  video_no_schema: ["warning", "Video without VideoObject markup", "Google needs VideoObject structured data (or a clear video page) to show the video in video results and key moments.", "Add VideoObject JSON-LD for each main video with at least name, thumbnailUrl and uploadDate (also description, duration, embedUrl or contentUrl)."],
+  video_schema_incomplete: ["warning", "VideoObject missing required fields", "Google requires name, thumbnailUrl and uploadDate; without them the video can't get video rich results.", "Fill in the missing fields with the video's real title, thumbnail image URL and upload date."],
+
   // ---------------- Crawlability (Google Search Central crawling docs) ----------------
   robots_txt_error: ["error", "robots.txt answers with a server error or not at all", "When robots.txt returns 5xx or times out, Google stops crawling the whole site until it can read it again.", "Make /robots.txt return 200 (or 404 if you have none) quickly and reliably."],
   robots_disallow_all: ["error", "robots.txt blocks Googlebot from the site", "Google can't fetch any page, so nothing new gets indexed and existing pages lose their snippets.", "Remove the Disallow: / rule for Googlebot (or *) unless the site really must stay out of Google."],
@@ -95,6 +106,26 @@ export const CRAWL = new Set(["http_4xx", "http_5xx", "broken_internal_link", "r
 export const SEVERITY = (id) => CHECKS[id][0];
 
 const W = (p) => p.data || {};
+
+// Headlines that are about a past year on purpose: history, archives, past events, "since/established/founded".
+const ON_PURPOSE = /\b(history|historic(?:al)?|archives?|since|established|est\.|founded|anniversary|events?|recap|in review|annual report|timeline|then and now|copyright)\b|©/i;
+const UNIT_AFTER = /^\s?(?:\+|%|km|kg|mm|cm|cc|ml|mg|mah|rpm|w|kw|hp|mb|gb|ft|sq|words|people|users|members|calories)\b|^[+%]/i;
+
+/** First year from 2000 to currentYear-1 in a title or H1, or null. Not flagged: headlines about history, archives,
+ *  events or "since/established/founded <year>"; ranges that reach the current year ("2025/26", "2021–present");
+ *  numbers that are prices, quantities or units ("$2000", "2,019", "2000 km"); and years glued to a model code
+ *  with a hyphen ("XR-2020"). Model years written as words ("2019 Corolla") can't be told apart and are flagged. */
+export function pastYear(text, currentYear) {
+  if (!text || ON_PURPOSE.test(text)) return null;
+  for (const m of text.matchAll(/\b(20\d{2})\b/g)) {
+    const y = +m[1], before = text.slice(0, m.index), after = text.slice(m.index + 4);
+    if (y >= currentYear || /[$€£¥#]\s*$|[\d.,]$|[a-z]-$/i.test(before) || UNIT_AFTER.test(after) || /^[.,]\d/.test(after)) continue;
+    const range = after.match(/^\s*[-–—/]\s*(\d{4}|\d{2}|present|now|today)\b/i);
+    if (range && (!/\d/.test(range[1]) || (range[1].length === 2 ? 2000 + +range[1] : +range[1]) >= currentYear)) continue;
+    return y;
+  }
+  return null;
+}
 
 /** Rules that need only the page itself. Returns [[checkId, detail], ...]. */
 export function pageIssues(p, ctx) {
@@ -153,7 +184,34 @@ export function pageIssues(p, ctx) {
   if (p.depth > 3) add("deep_page", `depth ${p.depth}`);
   if (p.indexable && ctx.sitemapLoaded && !p.in_sitemap) add("not_in_sitemap");
   if (!p.indexable && p.in_sitemap) add("noindex_in_sitemap");
+  if (p.indexable) contentIssues(p, d, ctx, add);
   return out;
+}
+
+/** Content age, structure and video rules for an indexable page. The audit date is ctx.auditDate (yyyy-mm-dd, set by
+ *  the crawler when the crawl ends), or today when it is missing. */
+function contentIssues(p, d, ctx, add) {
+  const today = ctx.auditDate || new Date().toISOString().slice(0, 10);
+  const types = d.schemaTypes || [];
+  const listing = (d.childLinks || 0) >= 5 || types.some((t) => /^(Blog|CollectionPage|ItemList)$/.test(t));
+  const newest = [d.dateModified, d.datePublished].filter(Boolean).sort().at(-1);
+  const yearBefore = `${+today.slice(0, 4) - 1}${today.slice(4)}`; // same day one year earlier (ISO strings compare by date)
+  if (newest && !listing && newest < yearBefore && isArticle(p)) {
+    const months = (+today.slice(0, 4) - +newest.slice(0, 4)) * 12 + (+today.slice(5, 7) - +newest.slice(5, 7));
+    add("content_stale", `newest date on the page: ${newest} (${months} months before the audit)`);
+  }
+  // News reports and event pages are about their year by nature.
+  if (!types.some((t) => /^(NewsArticle|Event)$|Event$/.test(t))) {
+    const year = +today.slice(0, 4);
+    const t = pastYear(p.title, year), h = t ? null : pastYear(p.h1, year);
+    if (t || h) add("title_past_year", t ? `title mentions ${t}: "${p.title.slice(0, 80)}"` : `H1 mentions ${h}: "${p.h1.slice(0, 80)}"`);
+  }
+  if (d.headingSkips) add("heading_skip", `${d.headingSkips} skip(s), e.g. ${d.headingSkipExample}`);
+  if (d.headingsBeforeH1) add("heading_before_h1", `${d.headingsBeforeH1} heading(s) before the H1`);
+  if (p.words >= 1500 && d.h2Count >= 4 && !(d.jumpLinks >= 2)) add("long_no_toc", `${p.words} words, ${d.h2Count} H2s, ${d.jumpLinks || 0} jump link(s) to headings`);
+  if (d.longParas) add("long_paragraphs", `${d.longParas} paragraph(s), longest ${d.longParaMax} words`);
+  if (d.videos && !d.videoObjects) add("video_no_schema", `${d.videos} video embed(s), no VideoObject`);
+  if (d.videoObjectsIncomplete) add("video_schema_incomplete", `${d.videoObjectsIncomplete} VideoObject(s); missing ${d.videoObjectMissing}`);
 }
 
 /** Health score: share of crawled pages free of errors, warnings counting half (documented in the UI). */

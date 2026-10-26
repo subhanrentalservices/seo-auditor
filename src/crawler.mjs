@@ -96,6 +96,23 @@ async function loadSitemaps(origin, robotsTxt, ua) {
 // Button or link text that asks the visitor to act (any kind of site: book, buy, sign up, get a quote, start a trial...).
 const CTA = /^(?:[^\w]*)(book|call|ring|phone|contact|enquire|inquire|get (?:a |your |started|in touch|quote)|request|claim|apply|buy|order|shop|add to (?:cart|bag|basket)|checkout|sign ?up|register|join|subscribe|start|try|free trial|demo|schedule|download|install|quote)\b/i;
 
+// Content age: a date the page states about itself, as yyyy-mm-dd. Accepts ISO dates/timestamps, "5 January 2024"
+// and "January 5, 2024". Numeric d/m/y forms are skipped (05/01/2024 is ambiguous between countries).
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+export function isoDate(s) {
+  s = String(s || "").trim();
+  let x, y, m, d;
+  if ((x = s.match(/^(\d{4})-(\d{2})-(\d{2})/))) [y, m, d] = [+x[1], +x[2], +x[3]];
+  else if ((x = s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3})[a-z]*\.?,?\s+(\d{4})\b/i))) [y, m, d] = [+x[3], MONTHS.indexOf(x[2].toLowerCase()) + 1, +x[1]];
+  else if ((x = s.match(/^([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/i))) [y, m, d] = [+x[3], MONTHS.indexOf(x[1].toLowerCase()) + 1, +x[2]];
+  else return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1990 || y > 2100) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+const STATED_DATE = /(?<![a-z])(last\s+updated|last\s+modified|updated|modified|published|posted)\s*(?:on)?\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?\s+[a-z]{3,9}\.?,?\s+\d{4}|[a-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})/gi;
+// Video embeds a VideoObject should describe (YouTube, Vimeo, Wistia).
+const VIDEO_SRC = /youtube(?:-nocookie)?\.com\/(?:embed|watch)|youtu\.be\/|player\.vimeo\.com|vimeo\.com\/\d|fast\.wistia\.(?:net|com)|wistia\.com\/medias|wi\.st\//i;
+
 export function parseHtml(html, url) {
   const $ = cheerio.load(html);
   const d = {};
@@ -120,6 +137,7 @@ export function parseHtml(html, url) {
   d.og = $('meta[property="og:title"]').length > 0 && $('meta[property="og:image"]').length > 0;
   d.jsonld = 0; d.jsonldInvalid = 0; d.schemaTypes = [];
   const faqNames = []; let bizRating = false, crumbs = false;
+  const declared = { m: [], p: [] }; // dates from JSON-LD and meta tags (m = modified, p = published)
   const BIZ = /^(LocalBusiness|Organization|AutoRepair|AutoBodyShop|Store|ProfessionalService|.*Business)$/;
   const scan = (o) => {
     if (Array.isArray(o)) return o.forEach(scan);
@@ -128,6 +146,14 @@ export function parseHtml(html, url) {
     if (types.includes("FAQPage")) for (const q of [].concat(o.mainEntity || [])) if (q && q.name) faqNames.push(String(q.name));
     if (types.includes("BreadcrumbList")) crumbs = true;
     if (types.some((t) => BIZ.test(t)) && (o.aggregateRating || o.review)) bizRating = true;
+    if (o.dateModified) declared.m.push(o.dateModified);
+    if (o.datePublished) declared.p.push(o.datePublished);
+    // A node with only @type/@id is a reference to a VideoObject described elsewhere, not one to validate.
+    if (types.includes("VideoObject") && Object.keys(o).some((k) => !k.startsWith("@"))) {
+      d.videoObjects = (d.videoObjects || 0) + 1;
+      const miss = ["name", "thumbnailUrl", "uploadDate"].filter((k) => !o[k] || (Array.isArray(o[k]) && !o[k].length));
+      if (miss.length) { d.videoObjectsIncomplete = (d.videoObjectsIncomplete || 0) + 1; d.videoObjectMissing ||= miss.join(", "); }
+    }
     Object.values(o).forEach(scan);
   };
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -190,6 +216,52 @@ export function parseHtml(html, url) {
   d.headings = headings.length;
   d.author = Boolean($('meta[name="author"]').attr("content") || $('[rel="author"]').length || /"author"\s*:/.test(html) || /\bBy\s+[A-Z][a-z]+\s+[A-Z][a-z]+/.test($("main").text() || $("body").text()));
   d.dated = Boolean($("time[datetime]").length || /"date(Modified|Published)"\s*:/.test(html) || /article:(modified|published)_time/.test(html) || /(Last updated|Updated|Published)\s*:?\s*\d{1,2}\s+\w+\s+\d{4}/i.test($("body").text()));
+  // Content age: the newest date the page states. Declared dates (JSON-LD, meta tags) win; <time datetime> and
+  // visible "Updated / Published <date>" text are used only when no date of that kind is declared (they may belong
+  // to related posts listed on the page).
+  const metaDate = (sel) => $(sel).map((_, e) => $(e).attr("content")).get();
+  declared.m.push(...metaDate('meta[property="article:modified_time"], meta[property="og:updated_time"], meta[itemprop="dateModified"]'));
+  declared.p.push(...metaDate('meta[property="article:published_time"], meta[itemprop="datePublished"]'));
+  const shown = { m: [], p: [] };
+  $("time[datetime]").each((_, e) => { const t = $(e); shown[t.attr("itemprop") === "dateModified" || /updat|modif/i.test((t.attr("class") || "") + " " + t.parent().text().slice(0, 80)) ? "m" : "p"].push(t.attr("datetime")); });
+  for (const [, kind, date] of $("body").text().replace(/\s+/g, " ").matchAll(STATED_DATE)) shown[/updat|modif/i.test(kind) ? "m" : "p"].push(date);
+  const newest = (list) => list.map(isoDate).filter(Boolean).sort().at(-1);
+  const dm = newest(declared.m) || newest(shown.m), dp = newest(declared.p) || newest(shown.p);
+  if (dm) d.dateModified = dm;
+  if (dp) d.datePublished = dp;
+  // Long-content structure: heading order inside the page's own content (menus, sidebars and the site header/footer
+  // are left out; an H1 always counts), and jump links to those headings.
+  const $c = hasMain ? $("main") : $("body");
+  const chrome = (h) => $(h).closest("nav, aside, [role=navigation], [role=banner], [role=contentinfo]").length
+    || $(h).closest("header, footer").filter((_, e) => !$(e).closest("article, section").length).length;
+  const hs = $c.find("h1,h2,h3,h4,h5,h6").toArray().filter((h) => h.name === "h1" || !chrome(h));
+  let prev = 0;
+  for (const h of hs) {
+    const lv = +h.name[1];
+    if (prev && lv > prev + 1) { d.headingSkips = (d.headingSkips || 0) + 1; d.headingSkipExample ||= `H${prev} → H${lv} "${$(h).text().replace(/\s+/g, " ").trim().slice(0, 60)}"`; }
+    prev = lv;
+  }
+  const firstH1 = hs.findIndex((h) => h.name === "h1");
+  if (firstH1 > 0) d.headingsBeforeH1 = firstH1;
+  d.h2Count = hs.filter((h) => h.name === "h2").length;
+  const targets = new Set(); // ids a table of contents can point at: the heading, its section wrapper, or an empty anchor before it
+  for (const h of hs) {
+    if (h.name === "h1") continue;
+    const own = $(h), parent = own.parent(), before = own.prev();
+    for (const e of [own, parent.is("main, body, article") ? null : parent, before.length && !before.text().trim() ? before : null]) {
+      if (e?.attr("id")) targets.add(e.attr("id"));
+      if (e?.attr("name")) targets.add(e.attr("name"));
+    }
+  }
+  const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  d.jumpLinks = new Set($('a[href^="#"]').map((_, a) => dec($(a).attr("href").slice(1))).get().filter((id) => targets.has(id))).size;
+  // Video embeds (counted before iframes are stripped from the text copy). A muted or looping <video> without
+  // controls (often started by script) is a decorative background, not a video for search.
+  const vids = $c.find("iframe").filter((_, f) => VIDEO_SRC.test($(f).attr("src") || $(f).attr("data-src") || "")).length
+    + $c.find('lite-youtube, lite-vimeo, [class*="wistia_async_"]').length
+    + $c.find("video").filter((_, v) => $(v).is("[controls]") || !$(v).is("[muted], [loop]")).length;
+  if (vids) d.videos = vids;
+  if ($('[itemtype*="VideoObject" i]').length) d.videoObjects = (d.videoObjects || 0) + $('[itemtype*="VideoObject" i]').length; // microdata: present, fields not validated
   // text
   const $t = cheerio.load(html);
   $t("script,style,noscript,svg,template,iframe").remove();
@@ -202,6 +274,10 @@ export function parseHtml(html, url) {
   // Booking and claim pages are mostly form fields; their labels and options are the content.
   d.formShare = +($("form").toArray().reduce((n, f) => n + ($.html(f) || "").length, 0) / Math.max(html.length, 1)).toFixed(2);
   const paras = scope.find("p").map((_, p) => $t(p).text().replace(/\s+/g, " ").trim()).get().filter((p) => p.split(" ").length >= 25);
+  // Very long paragraphs: over 180 words, the top of the citable-passage range (ai_no_citable_block, ai_no_answer
+  // ask for 40–180 words), so the checks never contradict each other.
+  const longParas = paras.map((p) => p.split(" ").length).filter((n) => n > 180);
+  if (longParas.length) { d.longParas = longParas.length; d.longParaMax = Math.max(...longParas); }
   const firstPos = paras.length ? text.indexOf(paras[0].slice(0, 40)) / Math.max(text.length, 1) : 1;
   // Up to 180 words, the same range as a citable passage (ai_no_citable_block): a 150-word opening paragraph that
   // answers the question is both. The old 120-word cap made the two checks contradict each other.
@@ -402,7 +478,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       if (r.status === 200 && r.ms < p.response_ms) run("UPDATE pages SET response_ms=? WHERE audit_id=? AND url=?", r.ms, auditId, p.url);
     }
     const pages = all("SELECT * FROM pages WHERE audit_id=?", auditId).map((p) => ({ ...p, data: JSON.parse(p.data) }));
-    const ctx = { siteIsHttps: start.startsWith("https://"), sitemapLoaded: sitemap.found };
+    // auditDate: the day the crawl finished (UTC), used by date checks such as content_stale.
+    const ctx = { siteIsHttps: start.startsWith("https://"), sitemapLoaded: sitemap.found, auditDate: new Date().toISOString().slice(0, 10) };
     const insIssue = db.prepare("INSERT INTO issues (audit_id,check_id,severity,url,detail) VALUES (?,?,?,?,?)");
     const raise = (id, url, detail = "") => insIssue.run(auditId, id, CHECKS[id][0], url, String(detail).slice(0, 300));
     // hreflang clusters (union-find): language versions of one page may share text, titles and descriptions.
