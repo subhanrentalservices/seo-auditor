@@ -11,6 +11,14 @@
     { "name": "December 2024 spam update", "type": "spam", "start": "2024-12-19" },
     { "name": "March 2025 core update", "type": "core", "start": "2025-03-13" },
     { "name": "June 2025 core update", "type": "core", "start": "2025-06-30" },
-    { "name": "August 2025 spam update", "type": "spam", "start": "2025-08-26" }
+    { "name": "August 2025 spam update", "type": "spam", "start": "2025-08-26" },
+    { "name": "December 2025 core update", "type": "core", "start": "2025-12-11" },
+    { "name": "February 2026 Discover core update (Discover only, US English)", "type": "other", "start": "2026-02-05" },
+    { "name": "March 2026 spam update", "type": "spam", "start": "2026-03-24" },
+    { "name": "March 2026 core update", "type": "core", "start": "2026-03-27" },
+    { "name": "May 2026 core update", "type": "core", "start": "2026-05-21" },
+    { "name": "June 2026 spam update", "type": "spam", "start": "2026-06-24" },
+    { "name": "August 2026 spam update", "type": "spam", "start": "2026-08-18" },
+    { "name": "September 2026 spam update", "type": "spam", "start": "2026-09-24" }
   ]
 }
