@@ -7,6 +7,7 @@ import { GoogleAuth } from "google-auth-library";
 import { db, all, get, run, ROOT, projectSettings, DATA } from "./db.mjs";
 import { afterAudit, phase } from "./runner.mjs";
 import { brandTerms, brandRegex } from "./trends.mjs";
+import { brandTest } from "./page2.mjs";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS gsc_queries (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -19,6 +20,9 @@ CREATE TABLE IF NOT EXISTS gsc_pages_past (project_id INTEGER NOT NULL REFERENCE
   PRIMARY KEY (project_id, period, url));
 CREATE TABLE IF NOT EXISTS gsc_trend (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   date TEXT NOT NULL, segment TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, PRIMARY KEY (project_id, date, segment));
+CREATE TABLE IF NOT EXISTS gsc_page_daily (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  url TEXT NOT NULL, date TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, PRIMARY KEY (project_id, url, date));
+CREATE INDEX IF NOT EXISTS idx_gscpd_date ON gsc_page_daily(project_id, date);
 `);
 
 // Service-account key: App settings, else GSC_KEY_FILE, else ~/.config/claude-seo/gsc-service-account.json.
@@ -81,13 +85,17 @@ export async function refresh(project) {
     brandRe ? query(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("includingRegex") }) : [],
     brandRe ? query(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("excludingRegex") }) : [],
   ]).catch((e) => ({ error: e.message }));
-  const [pages, queries, daily, prevPages, yoyPages, trend] = await Promise.all([
+  // Page × day for the same 16 months (change log, changes.mjs), paged 25,000 rows at a time. If it fails the rest of
+  // the refresh still saves and the stored days are kept; days older than Search Console keeps are never deleted.
+  const pageDailyCall = query(property, { ...hist, dimensions: ["page", "date"] }, 500000).catch((e) => ({ error: e.message }));
+  const [pages, queries, daily, prevPages, yoyPages, trend, pageDaily] = await Promise.all([
     query(property, { ...range, dimensions: ["page"] }),
     query(property, { ...range, dimensions: ["query", "page"] }, 50000),
     query(property, { startDate: iso(start90), endDate: iso(end), dimensions: ["date"] }),
     query(property, { ...past.prev, dimensions: ["page"] }),
     query(property, { ...past.yoy, dimensions: ["page"] }),
     trendCalls,
+    pageDailyCall,
   ]);
   db.exec("BEGIN");
   try {
@@ -112,12 +120,20 @@ export async function refresh(project) {
       for (const r of tBrand) it.run(project.id, r.keys[0], "brand", r.clicks, r.impressions, r.position);
       for (const r of tNon) it.run(project.id, r.keys[0], "nonbrand", r.clicks, r.impressions, r.position);
     }
+    if (Array.isArray(pageDaily)) {
+      run("DELETE FROM gsc_page_daily WHERE project_id=? AND date BETWEEN ? AND ?", project.id, hist.startDate, hist.endDate);
+      const ipd = db.prepare("INSERT OR REPLACE INTO gsc_page_daily (project_id,url,date,clicks,impressions,position) VALUES (?,?,?,?,?,?)");
+      for (const r of pageDaily) ipd.run(project.id, r.keys[0], r.keys[1], r.clicks, r.impressions, r.position);
+    }
+    run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc-page-daily:${project.id}`,
+      JSON.stringify({ ...hist, fetchedAt: new Date().toISOString(), error: Array.isArray(pageDaily) ? null : pageDaily.error }));
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc-trend:${project.id}`,
       JSON.stringify({ ...hist, terms, fetchedAt: new Date().toISOString(), error: Array.isArray(trend) ? null : trend.error }));
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc:${project.id}`, JSON.stringify({ property, fetchedAt: new Date().toISOString(), ...range }));
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
-  return { property, pages: pages.length, queries: queries.length, days: daily.length, trendDays: Array.isArray(trend) ? trend[0].length : 0 };
+  return { property, pages: pages.length, queries: queries.length, days: daily.length, trendDays: Array.isArray(trend) ? trend[0].length : 0,
+    pageDayRows: Array.isArray(pageDaily) ? pageDaily.length : 0 };
 }
 
 // Expected organic CTR by position on today's results pages (AI Overviews, local packs): the midpoint of 2026
@@ -171,8 +187,7 @@ export function summary(projectId) {
       AND impressions >= 0.15 * (SELECT SUM(impressions) FROM gsc_queries x WHERE x.project_id=q.project_id AND x.query=q.query)
     GROUP BY query HAVING COUNT(*) > 1 ORDER BY impressions DESC LIMIT 50`, projectId);
   const p = get("SELECT name, start_url FROM projects WHERE id=?", projectId);
-  const brandKeys = [new URL(p.start_url).hostname.replace(/^www./, "").split(".")[0], p.name.toLowerCase().replace(/[^a-z0-9]/g, "")].filter((k) => k.length >= 4);
-  const isBrand = (q) => brandKeys.some((k) => q.toLowerCase().replace(/[^a-z0-9]/g, "").includes(k));
+  const isBrand = brandTest(p.name, p.start_url); // one brand rule for every screen (page2.mjs)
   for (const r of [...topQueries, ...quickWins, ...cannibal]) r.brand = isBrand(r.query);
   const ctr = ctrReport(all("SELECT query, page, clicks, impressions, position FROM gsc_queries WHERE project_id=?", projectId), isBrand);
   return { connected: true, ...m, ctr, totals: { ...totals, ctr: totals.impressions ? totals.clicks / totals.impressions : 0, position: pos },

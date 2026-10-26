@@ -1,5 +1,6 @@
 // Command line: node src/cli.mjs add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2]
 //   | link-ideas <projectId> | install [--autostart]
+//   | change <projectId> <yyyy-mm-dd> <kind> "<summary>" <url> [url...] [--ref <commit or ticket>] | changes <projectId>
 import { all, get, run, projectSettings } from "./db.mjs";
 import { runAudit } from "./crawler.mjs";
 
@@ -37,8 +38,47 @@ if (cmd === "add") {
     const ideas = linkOpportunities(a.id);
     console.log(JSON.stringify(ideas, null, 1).slice(0, 20000));
   }
+} else if (cmd === "change" || cmd === "changes") {
+  // Change log (changes.mjs): record an SEO change, or list each one's Search Console before/after vs the rest of the site.
+  const { addChange, changeLog, KINDS } = await import("./changes.mjs");
+  try {
+    if (cmd === "change") {
+      const args = process.argv.slice(3), r = args.indexOf("--ref");
+      const ref = r >= 0 ? args.splice(r, 2)[1] : undefined;
+      const [pid, date, kind, summary, ...urls] = args;
+      if (!urls.length) throw new Error(`usage: change <projectId> <yyyy-mm-dd> <${KINDS.join("|")}> "<summary>" <url> [url...] [--ref <text>]`);
+      const c = addChange(Number(pid), { date, kind, summary, urls, ref });
+      console.log(`change ${c.id} logged for project ${c.projectId}: ${c.date} ${c.kind}, ${c.urls.length} page(s)${c.impact.status === "too-early" ? `; impact from about ${c.impact.readyAround}` : ""}`);
+    } else {
+      const log = changeLog(Number(a1));
+      const pc = (x) => (x === null || x === undefined ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x * 100))}%`);
+      const pts = (x) => (x === null || x === undefined ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x * 100))} pts`);
+      const pos = (p) => (p === null ? "–" : p.toFixed(1));
+      console.log(log.connected ? `Search Console page data ${log.firstDate} → ${log.lastDate}. "vs rest of site" = the pages' % change minus every other page's % change: how they did against the site's own trend, not proof the change caused it.`
+        : "No Search Console page data yet: refresh Search Console in the app to measure impact.");
+      if (log.error) console.log(`Last page-data fetch failed: ${log.error}`);
+      if (!log.changes.length) console.log("No changes logged.");
+      for (const c of log.changes) {
+        console.log(`\n#${c.id} ${c.date} [${c.kind}] ${c.summary}${c.ref ? ` (ref ${c.ref})` : ""}\n  ${c.urls.join("\n  ")}`);
+        const i = c.impact;
+        if (i.status === "too-early") console.log(`  too early: ${i.afterDays} day(s) of data after the change, needs ${log.minAfterDays} (about ${i.readyAround})`);
+        if (i.status !== "ok") continue;
+        console.table(i.windows.map((w) => {
+          const name = w.window === "since" ? `since (${w.days} d)` : w.window;
+          if (w.pending) return { window: name, clicks: `complete around ${w.readyAround}` };
+          if (w.noBefore) return { window: name, clicks: "no Search Console data before the change" };
+          const x = w.changed, k = w.control;
+          return { window: name, clicks: `${x.before.clicks} → ${x.after.clicks}`, "clicks Δ": pc(x.change.clicks),
+            impressions: `${x.before.impressions} → ${x.after.impressions}`, "impr. Δ": pc(x.change.impressions),
+            position: `${pos(x.before.position)} → ${pos(x.after.position)}`,
+            "rest of site Δ": pc(k.change[w.vsControl.basis]) + " " + w.vsControl.basis,
+            "vs rest of site": `${pts(w.vsControl[w.vsControl.basis])}${w.vsControl.label ? ` (${w.vsControl.label})` : ""}${w.small ? ", small numbers" : ""}` };
+        }));
+      }
+    }
+  } catch (e) { console.error(e.message); process.exitCode = 1; }
 } else if (cmd === "install") {
   const { installDesktopShortcut, setAutostart } = await import("./desktop.mjs");
   console.log("desktop shortcut:", await installDesktopShortcut());
   if (process.argv.includes("--autostart")) console.log("start with Windows:", await setAutostart(true));
-} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | install [--autostart]");
+} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId>");

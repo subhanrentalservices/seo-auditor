@@ -1,5 +1,5 @@
 // Data screens: Search Console now; keywords, backlinks, AI visibility and report are added below by T11–T13.
-import { h, api, toast, num, shortUrl, lineChart, table } from "./core.js";
+import { h, api, toast, num, shortUrl, lineChart, table, mount } from "./core.js";
 import { VIEWS, NAV, overviewCards } from "./views.js";
 
 const at = (view) => NAV.findIndex((n) => n.view === view);
@@ -160,6 +160,84 @@ async function trendCard(ctx) {
     d.drops, { empty: "No drop of 20% or more in this period." }));
 }
 
+// Change log (src/changes.mjs): every SEO change with its day and pages; Search Console before vs after for those pages
+// next to the same comparison for every other page (difference in differences). Never presented as proof of cause.
+const KIND_NAME = { title: "Title", content: "Content", links: "Links", technical: "Technical", schema: "Schema", "new-page": "New page", redirect: "Redirect", other: "Other" };
+const VS_BADGE = { ahead: "fixed", "in line": "notice", behind: "warning" };
+const ptsTxt = (p) => (p === null || p === undefined ? "–" : `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(Math.round(p * 100))} pts`);
+async function changeCard(ctx) {
+  const pid = ctx.project.id, base = ctx.project.start_url;
+  const d = await api(`/api/projects/${pid}/changes`);
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  const f = {
+    date: h("input", { type: "date", value: today, max: today, required: true }),
+    kind: h("select", {}, d.kinds.map((k) => h("option", { value: k }, KIND_NAME[k] || k))),
+    urls: h("textarea", { rows: 3, style: { width: "100%" }, required: true, placeholder: `${base.replace(/\/?$/, "/")}page-you-changed\n/another-page` }),
+    summary: h("input", { type: "text", maxLength: 500, required: true, placeholder: "e.g. Rewrote the title and intro to answer the main search" }),
+    ref: h("input", { type: "text", maxLength: 200, placeholder: "Commit or ticket (optional)" }),
+  };
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/api/projects/${pid}/changes`, { method: "POST", body: { date: f.date.value, kind: f.kind.value, urls: f.urls.value.split(/\s+/).filter(Boolean), summary: f.summary.value, ref: f.ref.value } });
+      toast("Change logged"); ctx.app.refresh();
+    } catch (err) { toast(err.message); }
+  };
+  const remove = async (c) => {
+    if (!confirm(`Delete the change "${c.summary}"?`)) return;
+    try { await api(`/api/projects/${pid}/changes/${c.id}`, { method: "DELETE" }); toast("Change deleted"); ctx.app.refresh(); } catch (err) { toast(err.message); }
+  };
+  const row = (label, el) => [h("label", {}, label), h("div", {}, el)];
+  const form = h("form", { onsubmit: save }, h("div", { class: "form" }, ...row("Day it went live", f.date), ...row("Kind", f.kind),
+    ...row("Pages (one per line)", f.urls), ...row("What changed", f.summary), ...row("Reference", f.ref)),
+    h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { class: "btn primary" }, "Log change")));
+
+  // Which window the table shows; each change falls back to "since" while that window is still filling.
+  let pick = "28 days";
+  const sel = h("select", { "aria-label": "Compare", onchange: (e) => { pick = e.target.value; draw(); } },
+    [...d.windows.map((n) => `${n} days`), "since"].map((w) => h("option", { value: w, selected: w === pick }, w === "since" ? "Since the change" : `${w} before vs after`)));
+  const win = (c) => {
+    const ws = c.impact.windows || [];
+    const w = ws.find((x) => x.window === pick);
+    return w && !w.pending && !w.noBefore ? w : ws.find((x) => x.window === "since" && !x.noBefore) || w;
+  };
+  const ba = (w, k, fmt) => (w?.changed ? h("span", { title: `${w.before.from} → ${w.before.to} vs ${w.after.from} → ${w.after.to}` },
+    `${fmt(w.changed.before[k])} → ${fmt(w.changed.after[k])}`, k !== "position" ? h("div", { class: "small" }, pctTxt(w.changed.change[k])) : null) : "–");
+  const status = (c) => {
+    const i = c.impact, w = win(c);
+    if (i.status === "no-data") return h("span", { class: "small muted" }, "No page data yet");
+    if (i.status === "too-early") return h("span", { class: "badge notice", title: `Needs ${d.minAfterDays} days of Search Console data after the change (data lags about 3 days); ${i.afterDays} so far` }, `too early · about ${fmtWeek(i.readyAround)}`);
+    if (!w?.changed) return h("span", { class: "small muted" }, w?.noBefore ? "No data before the change" : "–");
+    const v = w.vsControl;
+    return h("span", {}, v.label ? h("span", { class: `badge ${VS_BADGE[v.label]}`, title: `Basis: ${v.basis}. Rest of site ${pctTxt(w.control.change[v.basis])} ${v.basis}.` }, `${ptsTxt(v[v.basis])} ${v.label}`) : "–",
+      h("div", { class: "small" }, `${w.window === pick ? "" : `${w.window} (${w.days} d) · `}rest of site ${pctTxt(w.control.change[v.basis])} ${v.basis}`), w.small ? h("div", { class: "small muted" }, "small numbers") : null);
+  };
+  const what = (c) => {
+    const w = win(c);
+    return h("span", {}, h("span", { class: "badge" }, KIND_NAME[c.kind] || c.kind), " ", c.summary, c.ref ? h("span", { class: "small muted" }, ` · ${c.ref}`) : null,
+      c.urls.length === 1 ? h("div", { class: "small" }, shortUrl(c.urls[0], base))
+        : h("details", {}, h("summary", { class: "small" }, `${c.urls.length} pages`), w?.pages ? table([{ label: "Page", cls: "url", get: (p) => shortUrl(p.url, base) },
+          { label: "Clicks", num: true, get: (p) => `${num(p.before.clicks)} → ${num(p.after.clicks)}` }, { label: "Impr.", num: true, get: (p) => `${num(p.before.impressions)} → ${num(p.after.impressions)}` },
+          { label: "Pos.", num: true, get: (p) => `${pos(p.before.position)} → ${pos(p.after.position)}` }], w.pages) : h("div", { class: "small" }, c.urls.map((u) => shortUrl(u, base)).join(" · "))));
+  };
+  const box = h("div", {});
+  const draw = () => mount(box, table([{ label: "Day", get: (c) => fmtWeek(c.date) }, { label: "Change", get: what },
+    { label: "Clicks", num: true, get: (c) => ba(win(c), "clicks", num) }, { label: "Impressions", num: true, get: (c) => ba(win(c), "impressions", num) },
+    { label: "Position", num: true, get: (c) => ba(win(c), "position", pos) }, { label: "vs rest of site", get: status },
+    { label: "", get: (c) => h("button", { class: "btn sm", title: "Delete this change", onclick: () => remove(c) }, "Delete") }],
+  d.changes, { empty: "No changes logged yet. Log each change on the day it goes live (the CLI can too: node src/cli.mjs change …)." }));
+  draw();
+  return h("div", { class: "card" }, h("div", { class: "card-h" }, h("h2", {}, `Change log (${d.changes.length})`), d.changes.length ? sel : null),
+    h("p", { class: "hint" }, "Record every SEO change (titles, content, links, technical fixes, schema, new pages, redirects) with the day it went live. ",
+      "Each change compares its pages' Search Console clicks, impressions and position for the days before and the same number of days after (the change day itself is left out), ",
+      "next to the same comparison for every other page of the site. \"vs rest of site\" is the pages' % change minus the rest of the site's, in points: ahead or behind by 10 or more, else in line. ",
+      "It shows the change against the site's own trend, not proof that the change caused it: seasons, Google updates and other changes move pages too. ",
+      `Results start once ${d.minAfterDays} days of data after the change are in (Search Console lags about 3 days).`),
+    d.connected ? h("p", { class: "small" }, `Page data ${d.firstDate} → ${d.lastDate}.`) : h("p", { class: "small" }, "No page-by-day data yet: press Refresh above once to fetch it."),
+    d.error ? h("p", { class: "small" }, `The last refresh could not update page data (${d.error}); showing the previous data.`) : null,
+    box, h("h3", { style: { marginTop: "12px" } }, "Log a change"), form);
+}
+
 VIEWS.search = async (ctx) => {
   const d = await api(`/api/projects/${ctx.project.id}/gsc`);
   const btn = h("button", { class: "btn", onclick: () => gscRefresh(ctx, btn) }, d.connected ? "Refresh" : "Fetch now");
@@ -167,7 +245,8 @@ VIEWS.search = async (ctx) => {
     h("p", { class: "hint", style: { margin: 0 } }, d.connected ? `${d.property} · ${d.startDate} → ${d.endDate} (last 28 days of final data) · fetched ${new Date(d.fetchedAt).toLocaleString("en-AU")}`
       : "Not fetched yet. The service account must be added as a user on the property in Search Console (Settings → Users and permissions). The property is detected from the site URL, or set it in Settings."));
   const index = await indexCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Index status"), h("p", { class: "hint" }, e.message)));
-  if (!d.connected) return [head, index];
+  const changes = await changeCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Change log"), h("p", { class: "hint" }, e.message)));
+  if (!d.connected) return [head, index, changes];
   const decay = await decayCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Content decay"), h("p", { class: "hint" }, e.message)));
   const align = await alignCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Query-page alignment"), h("p", { class: "hint" }, e.message)));
   const trend = await trendCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Search trend (16 months)"), h("p", { class: "hint" }, e.message)));
@@ -180,7 +259,7 @@ VIEWS.search = async (ctx) => {
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Clicks per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.clicks, sub: `${num(r.impressions)} impressions` })), { max: null, label: "Clicks per day" })),
       h("div", { class: "card" }, h("h2", {}, "Impressions per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.impressions, sub: `position ${pos(r.position)}` })), { max: null, fmt: num, label: "Impressions per day" }))),
-    trend,
+    trend, changes,
     d.ctr ? h("div", { class: "card" }, h("h2", {}, "Why CTR is what it is"),
       h("p", { class: "hint" }, `${Math.round(d.ctr.deepShare * 100)}% of impressions come from position 21 or lower, where almost nobody clicks; there, CTR is a ranking problem, not a snippet problem. `,
         "Brand searches that are really for another business with a similar name also pull CTR down. Clicks on your Google Business Profile (calls, directions, website button) aren't counted here at all."),
