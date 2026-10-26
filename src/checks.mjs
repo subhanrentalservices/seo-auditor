@@ -31,7 +31,7 @@ export const CHECKS = {
   low_word_count: ["warning", "Low word count (under 200 words)", "Thin pages rarely rank or get cited.", "Add useful, original content or merge the page."],
   low_text_ratio: ["notice", "Low text-to-HTML ratio (under 10%)", "Mostly code and little visible text can mean thin or bloated pages.", "Add content or remove unnecessary markup."],
   img_missing_alt: ["warning", "Images without alt text", "Alt text helps accessibility and image search.", "Describe each meaningful image in its alt attribute."],
-  temporary_redirect: ["warning", "Temporary redirects (302/307)", "Temporary redirects may not pass signals to the target.", "Use 301 for permanent moves."],
+  temporary_redirect: ["warning", "Temporary redirects (302/307)", "Google keeps showing the old URL and doesn't take the target as canonical (no PageRank is lost: it's a canonical signal).", "For a permanent move use 301/308; keep 302/307 only for genuinely temporary detours."],
   sitemap_not_in_robots: ["notice", "Sitemap not declared in robots.txt", "Declaring it helps every search and AI crawler find the sitemap.", "Add a line: Sitemap: https://your-site/sitemap.xml"],
   external_link_blocked: ["notice", "External link refused the checker (401/403/429)", "The site blocks automated checks; the link usually works in a browser.", "Open the link manually to confirm it still works."],
   broken_external_link: ["warning", "Broken external links", "Dead outbound links look neglected.", "Update or remove the link."],
