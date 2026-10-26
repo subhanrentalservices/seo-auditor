@@ -4,6 +4,7 @@ import { h, mount, api, toast, num, shortUrl, meter } from "./core.js";
 import { VIEWS, NAV, overviewCards, pageSections } from "./views.js";
 import "./views-data.js";
 import "./views-paid.js"; // after views-data: it anchors its nav entries to "search"
+import "./views-reclaim.js"; // after views-paid: "Lost pages" sits right below Search Console
 import "./views-ai.js";
 import "./views-report.js";
 import "./views-ideas.js";

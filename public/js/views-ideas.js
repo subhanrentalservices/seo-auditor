@@ -1,6 +1,6 @@
 // UI for own ideas: I2 page change log, I3 edit locally, I4 internal link ideas, I5 what AI would quote,
 // I8 ask Claude for a fix, I10 robots tester.
-import { h, mount, api, toast, shortUrl, table } from "./core.js";
+import { h, mount, api, toast, shortUrl, table, num } from "./core.js";
 import { VIEWS, NAV, pageSections } from "./views.js";
 
 NAV.splice(NAV.findIndex((n) => n.view === "pages") + 1, 0, { view: "links", label: "Link ideas" });
@@ -99,10 +99,49 @@ async function page2Cards(ctx) {
   return [head, ...cards, after];
 }
 
+// Internal PageRank, strong pages → money pages, and hub-and-spoke clusters (src/linkgraph.mjs).
+const ROLE = { money: "service / product page", article: "article", home: "home page", utility: "legal / utility page" };
+async function linkGraphCards(ctx) {
+  const d = await api(`/api/audits/${ctx.auditData.audit.id}/link-graph`).catch(() => null);
+  if (!d || !d.pages.length) return [];
+  const base = ctx.project.start_url, flagged = d.targets.filter((t) => t.flagged);
+  const why = (t) => [t.reasons.includes("money") ? "service / product page" : null, t.gsc ? `Google position ${t.gsc.position}, ${num(t.gsc.impressions)} impressions` : null].filter(Boolean).join(" · ");
+  const strong = h("div", { class: "card" }, h("h2", {}, `Strong pages that could link to your money pages (${flagged.length})`),
+    h("p", { class: "hint" }, "Internal PageRank shows how much link value each page gets from your other pages (0–100, strongest page = 100), counting only links in the page text. ",
+      `Service, product and pricing pages${d.gscConnected ? ", and pages Google shows at positions 5–20," : ""} gain most from a text link on one of your 10 strongest pages. `,
+      "Listed: pages none of those strong pages link to from their text (menu and footer links don't count), with the strong pages that already mention their topic. Add a link only where the sentence reads naturally."),
+    d.oldAudit ? mark(false, "This audit can't tell text links from menu links yet. Run a new audit.") : null,
+    flagged.length ? flagged.map((t) => h("details", { style: { borderTop: "1px solid var(--line)", padding: "8px 0" } },
+      h("summary", {}, h("b", {}, shortUrl(t.url, base)), h("span", { class: "small muted" }, ` · PageRank ${num(t.pr)} · ${why(t)} · `,
+        t.candidates.length ? `${t.candidates.length} strong page${t.candidates.length === 1 ? "" : "s"} could link here` : "no strong page mentions its topic")),
+      t.candidates.length ? t.candidates.map((c) => { const [cl, l] = LINKED[c.linked || "none"];
+        return h("div", { style: { padding: "6px 0 6px 12px" } },
+          h("div", { class: "row", style: { justifyContent: "space-between", gap: "8px", flexWrap: "nowrap" } },
+            h("span", { class: "url", style: { overflowWrap: "anywhere" } }, shortUrl(c.from, base), h("span", { class: "small muted" }, ` · PageRank ${num(c.pr)}`)),
+            h("span", { class: `small ${cl}`, style: { whiteSpace: "nowrap" } }, l)),
+          h("div", { class: "small muted", style: { marginTop: "2px" } }, c.context)); })
+        : h("p", { class: "small muted", style: { margin: "4px 0 0 12px" } }, `None of the strongest pages talks about “${t.topic[0] || t.title}”. A genuine sentence about it on one of them, with a link, would pass it more value.`)))
+      : h("p", {}, `Every money page${d.gscConnected ? " and page on positions 5–20" : ""} already gets a text link from at least one of your strongest pages.`),
+    h("details", { style: { marginTop: "8px" } }, h("summary", {}, "Strongest pages (internal PageRank, top 15)"),
+      table([{ label: "Page", cls: "url", get: (p) => shortUrl(p.url, base) }, { label: "Type", get: (p) => h("span", { class: "small muted" }, ROLE[p.role] || p.role) },
+        { label: "Text links", num: true, get: (p) => num(p.pr) }, { label: "All links", num: true, get: (p) => num(p.prAll) },
+        { label: "Pages linking from text", num: true, get: (p) => num(p.textInlinks) }], d.pages.filter((p) => !p.side).slice(0, 15))));
+  const list = (label, urls, n) => n ? h("div", { class: "small", style: { margin: "4px 0 0 12px" } }, h("span", { style: { color: "var(--warn-ink)" } }, "! "), `${label} (${n}): `,
+    urls.map((u) => shortUrl(u, base)).join(", "), n > urls.length ? ` and ${n - urls.length} more` : "") : null;
+  const clusters = d.hubs.length ? h("div", { class: "card" }, h("h2", {}, `Topic clusters (hub and spoke): ${d.clusterFindings} missing link${d.clusterFindings === 1 ? "" : "s"}`),
+    h("p", { class: "hint" }, "A hub is a page whose folder holds other pages (/guides/ → /guides/…) or a listing page linking many pages below it. The hub should link to every page in its cluster, and each page should link back to the hub (a menu or breadcrumb link counts). A blog index that pages through its posts counts its later pages too."),
+    d.hubs.map((x) => h("div", { style: { borderTop: "1px solid var(--line)", padding: "8px 0" } },
+      h("div", {}, h("b", { class: "url" }, shortUrl(x.hub, base)), h("span", { class: "small muted" }, ` · ${x.children} page${x.children === 1 ? "" : "s"} in the cluster · links to ${x.linkedCount}`)),
+      !x.notLinkedCount && !x.noLinkBackCount ? mark(true, "Hub and pages link both ways.") : null,
+      list("Not linked from the hub", x.notLinked, x.notLinkedCount), list("No link back to the hub", x.noLinkBack, x.noLinkBackCount))))
+    : h("div", { class: "card" }, h("h2", {}, "Topic clusters (hub and spoke)"), h("p", { class: "muted", style: { margin: 0 } }, "No hubs: no page has other pages in its folder or lists 6+ pages below it."));
+  return [strong, clusters];
+}
+
 // I4
 VIEWS.links = async (ctx) => {
   if (!ctx.auditData) return h("div", { class: "card empty" }, "Run an audit first.");
-  const page2 = [...(await page2Cards(ctx)), await topicsCard(ctx)].filter(Boolean);
+  const page2 = [...(await page2Cards(ctx)), await topicsCard(ctx), ...(await linkGraphCards(ctx))].filter(Boolean);
   const rows = await api(`/api/audits/${ctx.auditData.audit.id}/link-opportunities`);
   const base = ctx.project.start_url;
   const head = h("div", { class: "card" }, h("h2", {}, "Internal link ideas"),

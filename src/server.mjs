@@ -100,7 +100,7 @@ export function createServer() {
 
 /** Load every module and listen on 127.0.0.1. Used by `node src/server.mjs` and by the desktop app. */
 export async function startServer() {
-  const mods = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibility.mjs", "./report.mjs", "./scheduler.mjs", "./extras.mjs", "./desktop.mjs", "./backlinks.mjs", "./quality.mjs", "./page2.mjs", "./indexing.mjs", "./topics.mjs", "./citations.mjs", "./decay.mjs", "./queries.mjs"];
+  const mods = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibility.mjs", "./report.mjs", "./scheduler.mjs", "./extras.mjs", "./desktop.mjs", "./backlinks.mjs", "./quality.mjs", "./page2.mjs", "./indexing.mjs", "./topics.mjs", "./citations.mjs", "./decay.mjs", "./queries.mjs", "./reclaim.mjs", "./linkgraph.mjs"];
   for (const m of mods) await import(m).then((x) => x.register?.({ routes, prefixes })).catch((e) => { if (e.code !== "ERR_MODULE_NOT_FOUND") console.error(m, e.message); });
   process.on("unhandledRejection", (e) => console.error("unhandled:", e?.stack || e));
   await new Promise((resolve, reject) => {

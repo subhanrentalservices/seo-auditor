@@ -13,15 +13,12 @@ const ARTICLE_TYPES = /^(BlogPosting|Article|NewsArticle|TechArticle|Report)$/;
 export const isArticle = (p) => ARTICLE_PATH.test(new URL(p.url).pathname + "/") && !/\/(blog|news|articles?|guides?|resources|learn|insights|posts?)\/?$/i.test(new URL(p.url).pathname)
   || (p.data?.schemaTypes || []).some((t) => ARTICLE_TYPES.test(t));
 
-/** pages: crawled pages ({url, status, indexable, content_type, data}); contentLinks: Map from_url → [to_url] of
- *  internal links placed in the page's own text. Returns [[checkId, url, detail], ...]. */
-export function conversionIssues(pages, contentLinks, start) {
-  const out = [];
-  const live = pages.filter((p) => p.status === 200 && p.indexable && (p.content_type || "").includes("html") && !p.data?.variantOf);
+/** A URL's role on the site: "utility", "home", "article" or "money" (service, product, pricing, category...).
+ *  A link target is judged by its URL (and its page when crawled), so a money page that failed to load in this
+ *  crawl still counts as one. Also used by linkgraph.mjs. */
+export function pageRoles(pages, start) {
   const home = new URL(start).pathname, byUrl = new Map(pages.map((p) => [p.url, p]));
-  // A link target is judged by its URL (and its page when crawled), so a money page that failed to load in this
-  // crawl still counts as one.
-  const kindOf = (u) => {
+  return (u) => {
     let path; try { path = new URL(u).pathname; } catch { return "other"; }
     if (UTILITY.test(path)) return "utility";
     if (path === home) return "home";
@@ -29,6 +26,14 @@ export function conversionIssues(pages, contentLinks, start) {
     if (isArticle(p) || /\/(blog|news|articles?|guides?|resources|learn|insights|posts?)\/?$/i.test(path)) return "article";
     return "money";
   };
+}
+
+/** pages: crawled pages ({url, status, indexable, content_type, data}); contentLinks: Map from_url → [to_url] of
+ *  internal links placed in the page's own text. Returns [[checkId, url, detail], ...]. */
+export function conversionIssues(pages, contentLinks, start) {
+  const out = [];
+  const live = pages.filter((p) => p.status === 200 && p.indexable && (p.content_type || "").includes("html") && !p.data?.variantOf);
+  const kindOf = pageRoles(pages, start);
   for (const p of live) {
     const d = p.data || {}, k = kindOf(p.url);
     if (k === "utility" || (d.childLinks || 0) >= 5) continue; // legal pages and listing pages
