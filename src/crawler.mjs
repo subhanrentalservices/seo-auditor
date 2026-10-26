@@ -9,6 +9,7 @@ import { CHECKS, pageIssues, healthScore } from "./checks.mjs";
 import { crawlabilitySiteIssues, paramTraps } from "./crawlability.mjs";
 import { aiPageIssues, aiSiteIssues, aiBotAccess, aiReadiness } from "./ai-checks.mjs";
 import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } from "./quality.mjs";
+import { conversionIssues } from "./conversion.mjs";
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
@@ -92,6 +93,9 @@ async function loadSitemaps(origin, robotsTxt, ua) {
   return { urls, lastmods, lastmodOf, found: seen.size > 0 && urls.size > 0, declared: declared.length > 0 };
 }
 
+// Button or link text that asks the visitor to act (any kind of site: book, buy, sign up, get a quote, start a trial...).
+const CTA = /^(?:[^\w]*)(book|call|ring|phone|contact|enquire|inquire|get (?:a |your |started|in touch|quote)|request|claim|apply|buy|order|shop|add to (?:cart|bag|basket)|checkout|sign ?up|register|join|subscribe|start|try|free trial|demo|schedule|download|install|quote)\b/i;
+
 export function parseHtml(html, url) {
   const $ = cheerio.load(html);
   const d = {};
@@ -153,6 +157,12 @@ export function parseHtml(html, url) {
   // contextual-link checks must not count it.
   const links = [];
   const hasMain = $("main").length > 0;
+  // Conversion path: ways for a visitor to act on this page (call, email, a form that isn't site search, a CTA button).
+  d.convTel = $('a[href^="tel:" i]').length;
+  d.convMail = $('a[href^="mailto:" i]').length;
+  d.convForm = $("form").filter((_, f) => $(f).attr("role") !== "search" && $(f).find("input,textarea,select").filter((_, i) =>
+    !/^(hidden|search|submit|button)$/i.test($(i).attr("type") || "") && !/^(q|s|search|query)$/i.test($(i).attr("name") || "")).length > 0).length;
+  d.convCta = $("a[href], button, input[type=submit]").filter((_, e) => CTA.test(($(e).text() || $(e).attr("value") || "").trim())).length;
   $("a[href]").each((_, a) => {
     const href = $(a).attr("href");
     if (!href || /^(mailto|tel|javascript|sms|#)/i.test(href.trim())) return;
@@ -439,6 +449,10 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const crossCluster = (us) => new Set(us.map(cluster)).size > 1;
     for (const [t, us] of byTitle) if (us.length > 1 && crossCluster(us)) us.forEach((u) => raise("dup_title", u, `"${t.slice(0, 80)}" on ${us.length} pages`));
     for (const [t, us] of byDesc) if (us.length > 1 && crossCluster(us)) us.forEach((u) => raise("dup_description", u, `shared by ${us.length} pages`));
+    const contentLinks = new Map();
+    for (const l of db.prepare("SELECT DISTINCT from_url, to_url FROM links WHERE audit_id=? AND internal=1 AND kind='a' AND placement='content'").iterate(auditId))
+      contentLinks.set(l.from_url, [...(contentLinks.get(l.from_url) || []), redirOf.get(l.to_url) || l.to_url]);
+    for (const [id, u, det] of conversionIssues(pages, contentLinks, start)) raise(id, u, det);
     for (const x of near) { raise("near_duplicate", x.a, `${Math.round(x.score * 100)}% of 5-word phrases shared with ${x.b}`); raise("near_duplicate", x.b, `${Math.round(x.score * 100)}% shared with ${x.a}`); }
     if (lm && lm.share >= 0.6 && !(lm.check?.share >= 0.7)) raise("sitemap_lastmod_uniform", origin + "/sitemap.xml",
       `${lm.n} of ${lm.total} URLs have lastmod ${lm.date}` + (lm.check ? `; only ${lm.check.changed} of ${lm.check.n} changed since audit #${lm.check.baseAudit}` : ""));
