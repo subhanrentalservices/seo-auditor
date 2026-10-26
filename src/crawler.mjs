@@ -14,6 +14,8 @@ import { robotsDirectives, applyHeaderRobots, canonicalHrefProblem, linkHeaderCa
 import { loadSitemaps } from "./sitemaps.mjs";
 import { rawRenderedDiff, renderPage, renderFindings, mergeRender, jsRedirectOf } from "./render-checks.mjs";
 import { uncrawlableLinks, anchorOf, ugcLinks, anchorFindings, linkSiteIssues, urlVariantIssues } from "./link-signals.mjs";
+import { schemaFindings } from "./schema.mjs";
+import { siteNameIssues, merchantPolicyIssues, localNapIssues } from "./schema-site.mjs";
 export { rawRenderedDiff };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
@@ -158,7 +160,7 @@ export function parseHtml(html, url) {
   d.viewport = $('meta[name="viewport"]').length > 0;
   d.og = $('meta[property="og:title"]').length > 0 && $('meta[property="og:image"]').length > 0;
   d.jsonld = 0; d.jsonldInvalid = 0; d.schemaTypes = [];
-  const faqNames = []; let bizRating = false, crumbs = false;
+  const faqNames = [], ld = []; let bizRating = false, crumbs = false;
   const declared = { m: [], p: [] }; // dates from JSON-LD and meta tags (m = modified, p = published)
   const BIZ = /^(LocalBusiness|Organization|AutoRepair|AutoBodyShop|Store|ProfessionalService|.*Business)$/;
   const scan = (o) => {
@@ -182,6 +184,7 @@ export function parseHtml(html, url) {
     d.jsonld++;
     try {
       const j = JSON.parse($(el).contents().text());
+      ld.push(j);
       scan(j);
       const walk = (o) => { if (Array.isArray(o)) return o.forEach(walk); if (o && typeof o === "object") { if (o["@type"]) d.schemaTypes.push(...[].concat(o["@type"])); Object.values(o).forEach(walk); } };
       walk(j);
@@ -251,9 +254,13 @@ export function parseHtml(html, url) {
   const metaDate = (sel) => $(sel).map((_, e) => $(e).attr("content")).get();
   declared.m.push(...metaDate('meta[property="article:modified_time"], meta[property="og:updated_time"], meta[itemprop="dateModified"]'));
   declared.p.push(...metaDate('meta[property="article:published_time"], meta[itemprop="datePublished"]'));
-  const shown = { m: [], p: [] };
+  const shown = { m: [], p: [] }, stated = { m: [], p: [] }; // stated: visible "Published / Updated <date>" text only
   $("time[datetime]").each((_, e) => { const t = $(e); shown[t.attr("itemprop") === "dateModified" || /updat|modif/i.test((t.attr("class") || "") + " " + t.parent().text().slice(0, 80)) ? "m" : "p"].push(t.attr("datetime")); });
-  for (const [, kind, date] of $("body").text().replace(/\s+/g, " ").matchAll(STATED_DATE)) shown[/updat|modif/i.test(kind) ? "m" : "p"].push(date);
+  for (const [, kind, date] of $("body").text().replace(/\s+/g, " ").matchAll(STATED_DATE)) {
+    const k = /updat|modif/i.test(kind) ? "m" : "p";
+    shown[k].push(date);
+    if (isoDate(date)) stated[k].push(isoDate(date));
+  }
   const newest = (list) => list.map(isoDate).filter(Boolean).sort().at(-1);
   const dm = newest(declared.m) || newest(shown.m), dp = newest(declared.p) || newest(shown.p);
   if (dm) d.dateModified = dm;
@@ -334,6 +341,9 @@ export function parseHtml(html, url) {
   if (hiddenFaq.length) d.faqHidden = hiddenFaq.length + " of " + faqNames.length + ": " + hiddenFaq[0].slice(0, 80);
   if (crumbs && !$('[aria-label*="readcrumb" i], [class*="crumb" i], [itemtype*="BreadcrumbList"]').length) d.crumbHidden = true;
   if (bizRating) d.selfReview = true;
+  // Required/recommended properties, values the page doesn't show, retired types, dates, conflicts (schema.mjs).
+  Object.assign(d, schemaFindings(ld, { text: $t("body").text().replace(/\s+/g, " "), stated, ogSiteName: $('meta[property="og:site_name"]').attr("content"),
+    itemtypes: $("[itemtype]").map((_, e) => $(e).attr("itemtype")).get() }));
   // Listing pages (a blog index, a category) link to many pages below their own folder.
   const here = new URL(url);
   if (here.pathname.endsWith("/") && here.pathname !== "/") {
@@ -437,7 +447,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
           // Google follows a JavaScript redirect after rendering: crawl the target like a linked page.
           const to = d.jsRedirect?.to && normalize(d.jsRedirect.to);
           if (to && inScope(to) && !seen.has(to)) { seen.set(to, (depth ?? 0) + 1); queue.push(to); }
-          if (url === start) home = { html: r.body, url: final };
+          if (url === start) home = { html: r.body, url: final, dom: html }; // dom: the rendered HTML when rendering is on
         }
         applyHeaderRobots(d, r.headers.get("x-robots-tag") || ""); // only googlebot: or unscoped header lines count
         const linkCanon = linkHeaderCanonical(r.headers.get("link"), final);
@@ -528,7 +538,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     }
     const pages = all("SELECT * FROM pages WHERE audit_id=?", auditId).map((p) => ({ ...p, data: JSON.parse(p.data) }));
     // auditDate: the day the crawl finished (UTC), used by date checks such as content_stale.
-    const ctx = { siteIsHttps: start.startsWith("https://"), sitemapLoaded: sitemap.found, auditDate: new Date().toISOString().slice(0, 10) };
+    const ctx = { siteIsHttps: start.startsWith("https://"), sitemapLoaded: sitemap.found, auditDate: new Date().toISOString().slice(0, 10), renderJs: Boolean(settings.renderJs) };
     const insIssue = db.prepare("INSERT INTO issues (audit_id,check_id,severity,url,detail) VALUES (?,?,?,?,?)");
     const raise = (id, url, detail = "") => insIssue.run(auditId, id, CHECKS[id][0], url, String(detail).slice(0, 300));
     // hreflang clusters (union-find): language versions of one page may share text, titles and descriptions.
@@ -551,6 +561,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const robotsChanges = robotsChangeIssues(project.id, auditId, robotsRes.status, robotsTxt, origin);
     const favicon = ctl.stop || !home ? [] : await faviconIssues({ start: home.url, html: home.html, robotsTxt, ua }).catch(() => []);
     const homeScripts = ctl.stop || !home ? [] : await scriptTrapIssues({ start: home.url, html: home.html, ua }).catch(() => []);
+    const localNap = ctl.stop || !home ? [] : await localNapIssues({ url: home.url, html: home.dom }, settings).catch(() => []);
     const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
     const lm = lastmodUniformity(sitemap.lastmods || []);
     // A shared date is honest after a real site-wide edit: check those pages' text against the audit before that date.
@@ -598,6 +609,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [id, det] of aiSiteIssues(robotsTxt, origin)) raise(id, origin + "/robots.txt", det);
     for (const [id, u, det] of [...crawlSite, ...robotsChanges, ...favicon, ...homeScripts, ...blockedChecks, ...sitemap.problems]) raise(id, u, det);
     for (const [id, u, det] of [...canonicalSiteIssues(pages, start), ...soft404Issues(pages, { start, notFoundHash })]) raise(id, u, det);
+    for (const [id, u, det] of [...siteNameIssues(pages, start), ...merchantPolicyIssues(pages, start), ...localNap]) raise(id, u, det);
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     const aLinks = db.prepare("SELECT DISTINCT from_url,to_url,internal,nofollow,rel FROM links WHERE audit_id=? AND kind='a'").iterate(auditId);
     for (const [id, u, det] of [...linkSiteIssues(aLinks, { pages, redirOf, inScope, robots: robotsTxt ? robots : null, auditDate: ctx.auditDate }), ...urlVariantIssues(pages)]) raise(id, u, det);

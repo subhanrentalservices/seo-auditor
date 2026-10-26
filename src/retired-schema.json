@@ -1,0 +1,21 @@
+{
+  "about": "Structured data features Google Search no longer shows as a rich result (schema_retired_type). Editable: add a feature when Google's documentation changelog retires one. Match by types (any of), allTypes (every one), typePattern (regex), unlessTypes, property (present on the node) and valueTypes (the property's value has one of these types). Book actions is NOT retired: Google removed its deprecation banner on 5 Nov 2025. Course list (carousel) and Education Q&A are still supported.",
+  "checked": "2026-10-26",
+  "source": "https://developers.google.com/search/updates",
+  "features": [
+    { "name": "HowTo rich result", "types": ["HowTo"], "since": "2023-09-14", "source": "https://developers.google.com/search/blog/2023/08/howto-faq-changes" },
+    { "name": "FAQ rich result", "types": ["FAQPage"], "since": "2026-05-07", "source": "https://developers.google.com/search/updates" },
+    { "name": "Sitelinks search box (WebSite SearchAction)", "types": ["WebSite"], "property": "potentialAction", "valueTypes": ["SearchAction"], "since": "2024-11-21", "source": "https://developers.google.com/search/blog/2024/10/sitelinks-search-box" },
+    { "name": "Special announcement", "types": ["SpecialAnnouncement"], "since": "2025-07-31", "source": "https://developers.google.com/search/blog/2025/06/simplifying-search-results" },
+    { "name": "Fact check (ClaimReview)", "types": ["ClaimReview"], "since": "2025-06-12", "source": "https://developers.google.com/search/blog/2025/06/simplifying-search-results" },
+    { "name": "Course info (Course with hasCourseInstance; the Course list carousel is still supported)", "types": ["Course"], "property": "hasCourseInstance", "since": "2025-06-12", "source": "https://developers.google.com/search/blog/2025/06/simplifying-search-results" },
+    { "name": "Learning video (VideoObject + LearningResource; plain VideoObject is still supported)", "allTypes": ["VideoObject", "LearningResource"], "since": "2025-06-12", "source": "https://developers.google.com/search/blog/2025/06/simplifying-search-results" },
+    { "name": "Vehicle listing (Car/Vehicle with offers; Product markup is still supported)", "types": ["Car", "Vehicle", "Motorcycle", "BusOrCoach", "MotorizedBicycle"], "unlessTypes": ["Product"], "property": "offers", "since": "2025-06-12", "source": "https://developers.google.com/search/blog/2025/06/simplifying-search-results" },
+    { "name": "Estimated salary (Occupation)", "types": ["Occupation"], "since": "2025-06-12", "source": "https://developers.google.com/search/blog/2025/06/simplifying-search-results" },
+    { "name": "Online event properties (eventAttendanceMode)", "typePattern": "Event$", "property": "eventAttendanceMode", "since": "2025-06-05", "source": "https://developers.google.com/search/docs/appearance/structured-data/event" },
+    { "name": "Online event location (VirtualLocation; Google's event experience needs a physical Place)", "typePattern": "Event$", "property": "location", "valueTypes": ["VirtualLocation"], "since": "2025-06-05", "source": "https://developers.google.com/search/docs/appearance/structured-data/event" }
+  ],
+  "contexts": [
+    { "name": "data-vocabulary.org markup", "match": "data-vocabulary.org", "since": "2021-01-29", "source": "https://developers.google.com/search/blog/2020/01/data-vocabulary" }
+  ]
+}
