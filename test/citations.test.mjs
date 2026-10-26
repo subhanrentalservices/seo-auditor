@@ -8,7 +8,7 @@ import path from "node:path";
 
 process.env.SEO_AUDITOR_DATA = mkdtempSync(path.join(tmpdir(), "seo-auditor-test-")); // keep the real database untouched
 const { run } = await import("../src/db.mjs");
-const { normText, normPhone, phonesIn, napFromHtml, addressParts, compareListing, addCitation, removeCitation, checkCitations, citationsData, referenceNap } =
+const { siteName, normText, normPhone, phonesIn, napFromHtml, addressParts, compareListing, addCitation, removeCitation, checkCitations, citationsData, referenceNap } =
   await import("../src/citations.mjs");
 
 const SITE = "https://acmemotors.com.au/";
@@ -27,6 +27,13 @@ test("abbreviations, punctuation and phone formats normalise to the same thing",
   assert.equal(normPhone("+61 3 9000 1234"), "0390001234");
   assert.equal(normPhone("(03) 9000 1234"), "0390001234");
   assert.deepEqual(phonesIn("Call (03) 9000 1234 or 0412 345 678, or 1300 123 456. ABN 12 345 678 901"), ["0390001234", "0412345678", "1300123456"]);
+});
+
+test("the directory's name is its domain, not a subdomain or the business's own subdomain", () => {
+  assert.equal(siteName("https://reviews.birdeye.com/acme-1"), "birdeye");
+  assert.equal(siteName("https://acme-motors-pty-ltd.wheree.com/"), "wheree");
+  assert.equal(siteName("https://www.yellowpages.com.au/vic/acme"), "yellowpages");
+  assert.equal(siteName("https://au.showmelocal.com/acme"), "showmelocal");
 });
 
 test("the business's details come from the home page's LocalBusiness JSON-LD", () => {
@@ -48,7 +55,7 @@ test("a listing with the same details written differently matches; old address o
 
 test("listings are added, checked, and a bot wall or a missing page is reported, not counted as wrong", async () => {
   assert.throws(() => addCitation(990, "not a url"), /full listing address/);
-  for (const u of ["https://dir-a.example/acme", "https://www.dir-b.example/listing/1", "https://dir-c.example/x", "https://dir-d.example/gone"]) addCitation(990, u);
+  for (const u of ["https://dir-a.example/acme", "https://www.dir-b.example/listing/1", "https://dir-c.example/x", "https://dir-d.example/gone", "https://dir-e.example/wait"]) addCitation(990, u);
   addCitation(990, "https://dir-a.example/acme"); // duplicate ignored
   const pages = {
     [SITE]: { ok: true, status: 200, html: home },
@@ -56,18 +63,19 @@ test("listings are added, checked, and a bot wall or a missing page is reported,
     "https://www.dir-b.example/listing/1": { ok: true, status: 200, html: listing("Acme Motors · 415 Old Highway, Springfield 3998 · 03 9000 1234") },
     "https://dir-c.example/x": { ok: false, status: 403, html: "<html>Access denied</html>" },
     "https://dir-d.example/gone": { ok: false, status: 404, html: "" },
+    "https://dir-e.example/wait": { ok: true, status: 202, html: listing("<div id=app>Loading…</div>") },
   };
   const r = await checkCitations(project, { fetchPage: async (u) => pages[u] });
   await r.done;
   assert.equal(r.nap.source, "site");
   const d = citationsData(project);
-  assert.deepEqual([d.total, d.match, d.mismatch, d.blocked], [4, 1, 1, 1]);
+  assert.deepEqual([d.total, d.match, d.mismatch, d.blocked], [5, 1, 1, 2], "a holding page with no details is 'check by hand', not wrong details");
   const by = Object.fromEntries(d.rows.map((x) => [x.site, x]));
   assert.equal(by["dir-b"].address_ok, 0);
   assert.equal(by["dir-d"].status, "gone");
   assert.equal(d.noWebsite, 1, "the matching listing has no link to the site");
   removeCitation(990, "https://dir-d.example/gone");
-  assert.equal(citationsData(project).total, 3);
+  assert.equal(citationsData(project).total, 4);
 });
 
 test("details in Settings take priority over the home page", async () => {

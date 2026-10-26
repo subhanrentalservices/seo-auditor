@@ -110,9 +110,11 @@ async function realFetch(url) {
 // Bot walls answer 200 with a challenge page as well as 403/429/503.
 const BLOCKED = /captcha|cf-chl|challenge-platform|access denied|are you a robot|verify you are human|enable javascript and cookies/i;
 
+/** The directory's name from its domain: "reviews.birdeye.com" → "birdeye", "acme.wheree.com" → "wheree", "x.com.au" → "x". */
 export function siteName(url) {
-  const h = new URL(url).hostname.replace(/^www\.|^m\.|^au\./, "");
-  return h.split(".")[0];
+  const labels = new URL(url).hostname.split(".");
+  const suffix = /^(com|net|org|edu|gov|asn|id|co)$/.test(labels.at(-2)) && labels.at(-1).length === 2 ? 2 : 1;
+  return labels.at(-1 - suffix) || labels[0];
 }
 
 export function addCitation(projectId, url) {
@@ -140,11 +142,15 @@ export async function checkCitations(project, { fetchPage = realFetch } = {}) {
       const r = await fetchPage(url);
       const wall = BLOCKED.test(r.html.slice(0, 20000));
       const c = r.ok ? compareListing(r.html, nap, project.start_url) : null;
-      if (c && !(wall && !c.phone_ok)) {
+      // A real listing shows at least the name, address or phone; a page with none of them is a holding page
+      // (202 "please wait", JavaScript-only app, consent wall), so it can't be judged.
+      const unreadable = c && !c.name_ok && !c.address_ok && !c.phone_ok;
+      if (c && !(wall && !c.phone_ok) && !unreadable) {
         up.run(r.status, c.status, c.name_ok, c.address_ok, c.phone_ok, c.website_ok, JSON.stringify(c.other_phones), null, project.id, url);
       } else {
-        const st = wall || [401, 403, 429, 503].includes(r.status) ? "blocked" : [404, 410].includes(r.status) ? "gone" : "error";
-        up.run(r.status || null, st, null, null, null, null, null, r.error || (wall ? "Bot check page" : `HTTP ${r.status}`), project.id, url);
+        const st = wall || unreadable || [401, 403, 429, 503].includes(r.status) ? "blocked" : [404, 410].includes(r.status) ? "gone" : "error";
+        up.run(r.status || null, st, null, null, null, null, null,
+          r.error || (wall ? "Bot check page" : unreadable ? `HTTP ${r.status}: no name, address or phone on the page as loaded` : `HTTP ${r.status}`), project.id, url);
       }
       emit({ type: "phase", projectId: project.id, auditId: null, phase: `Listings ${++done}/${rows.length}` });
     }
@@ -164,7 +170,7 @@ const ADVICE = {
 export function citationsData(project) {
   const s = projectSettings(project);
   const rows = all("SELECT * FROM citations WHERE project_id=? ORDER BY status='match', site, url", project.id)
-    .map((r) => ({ ...r, other_phones: JSON.parse(r.other_phones || "[]"), advice: r.status ? ADVICE[r.status] : "Not checked yet." }));
+    .map((r) => ({ ...r, site: siteName(r.url), other_phones: JSON.parse(r.other_phones || "[]"), advice: r.status ? ADVICE[r.status] : "Not checked yet." }));
   const count = (st) => rows.filter((r) => r.status === st).length;
   return { running: running.has(project.id), napSettings: { name: s.napName || "", address: s.napAddress || "", phone: s.napPhone || "" },
     total: rows.length, match: count("match"), mismatch: count("mismatch"), blocked: count("blocked"), unchecked: rows.filter((r) => !r.status).length,
