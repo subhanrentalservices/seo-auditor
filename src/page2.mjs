@@ -26,7 +26,9 @@ export function brandTest(name, startUrl) {
   return (q) => {
     const c = compact(q), t = norm(q).split(" ");
     return (label.length > 3 && c.includes(label)) || (compact(name).length > 3 && c.includes(compact(name)))
-      || (first.length <= 3 && first && t[0] === first) || (t.length && t.every((w) => nameWords.includes(w)));
+      || (first.length <= 3 && first && t[0] === first) || (t.length && t.every((w) => nameWords.includes(w)))
+      // A shortened brand ("acme widg", "acmewidget", "acme widgets" → "acmewidgets"): 5+ characters that start the brand.
+      || (c.length >= 5 && [label, compact(name)].some((k) => k.length > c.length && k.startsWith(c.replace(/s$/, ""))));
   };
 }
 

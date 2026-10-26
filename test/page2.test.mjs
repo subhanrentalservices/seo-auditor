@@ -96,3 +96,10 @@ test("report: a brand search on a suburb page points to the brand page instead o
   assert.deepEqual({ ...by["/riverside.html"].betterPage, inlinks: undefined }, { url: S + "/mercedes.html", title: "Mercedes-Benz Service | Bolt Garage", covers: ["mercedes"], inlinks: undefined, linked: "menu" });
   assert.equal(by["/logbook.html"].betterPage, null, "“Book your service” is not the page about “log book”");
 });
+
+test("brand: a shortened or plural form of the brand counts as brand; a different business sharing a word does not", async () => {
+  const { brandTest } = await import("../src/page2.mjs");
+  const isBrand = brandTest("Acme Widgets", "https://acmewidgets.example/");
+  for (const q of ["acme widg", "acmewidget", "acme widgets reviews", "acme widgets"]) assert.equal(isBrand(q), true, q);
+  for (const q of ["acme tools", "widgets near me", "acmewidgetry"]) assert.equal(isBrand(q), false, q);
+});
