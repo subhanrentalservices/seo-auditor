@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS gsc_queries (project_id INTEGER NOT NULL REFERENCES p
 CREATE INDEX IF NOT EXISTS idx_gscq ON gsc_queries(project_id, query);
 CREATE TABLE IF NOT EXISTS gsc_daily (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   date TEXT NOT NULL, clicks INTEGER, impressions INTEGER, ctr REAL, position REAL, PRIMARY KEY (project_id, date));
+CREATE TABLE IF NOT EXISTS gsc_pages_past (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  period TEXT NOT NULL, url TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, start_date TEXT, end_date TEXT,
+  PRIMARY KEY (project_id, period, url));
 `);
 
 // Service-account key: App settings, else GSC_KEY_FILE, else ~/.config/claude-seo/gsc-service-account.json.
@@ -60,10 +63,16 @@ export async function refresh(project) {
   if (!property) throw Object.assign(new Error("No Search Console property for this site is shared with the service account"), { status: 400 });
   const end = new Date(Date.now() - 3 * 864e5), start = new Date(end - 27 * 864e5), start90 = new Date(end - 89 * 864e5);
   const range = { startDate: iso(start), endDate: iso(end) };
-  const [pages, queries, daily] = await Promise.all([
+  // Same-length windows to compare each page with: the 28 days before, and the same 28 days a year ago
+  // (364 days back, so weekdays line up). Used by the content-decay report.
+  const past = { prev: { startDate: iso(new Date(start - 28 * 864e5)), endDate: iso(new Date(start - 864e5)) },
+    yoy: { startDate: iso(new Date(start - 364 * 864e5)), endDate: iso(new Date(end - 364 * 864e5)) } };
+  const [pages, queries, daily, prevPages, yoyPages] = await Promise.all([
     query(property, { ...range, dimensions: ["page"] }),
     query(property, { ...range, dimensions: ["query", "page"] }, 50000),
     query(property, { startDate: iso(start90), endDate: iso(end), dimensions: ["date"] }),
+    query(property, { ...past.prev, dimensions: ["page"] }),
+    query(property, { ...past.yoy, dimensions: ["page"] }),
   ]);
   db.exec("BEGIN");
   try {
@@ -75,6 +84,10 @@ export async function refresh(project) {
     for (const r of queries) iq.run(project.id, r.keys[0], r.keys[1], r.clicks, r.impressions, r.ctr, r.position);
     const id = db.prepare("INSERT OR REPLACE INTO gsc_daily (project_id,date,clicks,impressions,ctr,position) VALUES (?,?,?,?,?,?)");
     for (const r of daily) id.run(project.id, r.keys[0], r.clicks, r.impressions, r.ctr, r.position);
+    run("DELETE FROM gsc_pages_past WHERE project_id=?", project.id);
+    const pp = db.prepare("INSERT OR REPLACE INTO gsc_pages_past (project_id,period,url,clicks,impressions,position,start_date,end_date) VALUES (?,?,?,?,?,?,?,?)");
+    for (const [period, rows] of [["prev", prevPages], ["yoy", yoyPages]])
+      for (const r of rows) pp.run(project.id, period, r.keys[0], r.clicks, r.impressions, r.position, past[period].startDate, past[period].endDate);
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc:${project.id}`, JSON.stringify({ property, fetchedAt: new Date().toISOString(), ...range }));
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }

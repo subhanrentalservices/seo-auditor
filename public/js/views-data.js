@@ -54,6 +54,29 @@ async function indexCard(ctx) {
       table([{ label: "Page", cls: "url", get: (r) => shortUrl(r.url, base) }, { label: "Google says", get: (r) => r.coverage || KIND_LABEL[r.kind] }], expected)) : null);
 }
 
+// Content decay (pages losing clicks vs the 28 days before and vs last year) and indexable pages Google shows for nothing.
+const CAUSE = { gone: "Dropped out", rank: "Ranks lower", demand: "Fewer searches", ctr: "Fewer clicks per view", seasonal: "Seasonal" };
+async function decayCards(ctx) {
+  const d = await api(`/api/projects/${ctx.project.id}/decay`);
+  const base = ctx.project.start_url;
+  const delta = (x) => (x ? h("span", { title: `${num(x.clicksThen)} clicks then, position ${pos(x.positionThen)}` }, `−${num(x.lost)} (${Math.round(x.pct * 100)}%)`) : "–");
+  const refetch = !d.prevWindow ? h("p", { class: "small" }, "Press Refresh above once: comparison windows are fetched with the next Search Console refresh.") : null;
+  return [h("div", { class: "card" }, h("h2", {}, `Content decay (${d.decaying.filter((r) => !r.seasonal).length})`),
+    h("p", { class: "hint" }, "Pages that lost at least 30% of their clicks (and 5 or more) against the 28 days before",
+      d.hasYoy ? " or the same 28 days last year" : "", ". Refresh the top of this list first: it's traffic you already earned. ",
+      d.prevWindow ? `Compared windows: ${d.prevWindow}${d.yoyWindow ? ` and ${d.yoyWindow}` : ""}.` : ""), refetch,
+    table([{ label: "Page", cls: "url", get: (r) => shortUrl(r.url, base) }, { label: "Clicks now", num: true, get: (r) => num(r.clicks) },
+      { label: "vs prior 28 days", num: true, get: (r) => delta(r.vsPrev) }, { label: "vs last year", num: true, get: (r) => delta(r.vsYear) },
+      { label: "Likely cause", get: (r) => h("span", { class: `badge ${r.seasonal ? "notice" : "warning"}` }, CAUSE[r.cause]) },
+      { label: "What to do", get: (r) => h("span", { class: "small" }, r.advice) }], d.decaying, { empty: "No page lost a meaningful share of its clicks." })),
+  h("div", { class: "card" }, h("h2", {}, `Pages Google shows for nothing (${d.invisible.length})`),
+    h("p", { class: "hint" }, "Indexable pages from the latest audit with no impressions in 56 days. Give each one a clear search to answer, merge it into a stronger page (with a 301), or keep it out of the index if it isn't meant for search. Pages under 30 days old may just need time."),
+    table([{ label: "Page", cls: "url", get: (r) => h("span", {}, shortUrl(r.url, base), r.isNew ? h("span", { class: "badge new", style: { marginLeft: "6px" } }, "new") : null) },
+      { label: "Title", get: (r) => h("span", { class: "small" }, r.title || "–") }, { label: "Words", num: true, get: (r) => num(r.words) }, { label: "Internal links in", num: true, get: (r) => num(r.inlinks) }],
+      d.invisible, { empty: d.connected ? "Every indexable page got impressions." : "Fetch Search Console data first." }),
+    d.expected.length ? h("p", { class: "small" }, `Also without impressions, as expected (contact, legal, account pages): ${d.expected.map((r) => shortUrl(r.url, base)).join(", ")}.`) : null)];
+}
+
 VIEWS.search = async (ctx) => {
   const d = await api(`/api/projects/${ctx.project.id}/gsc`);
   const btn = h("button", { class: "btn", onclick: () => gscRefresh(ctx, btn) }, d.connected ? "Refresh" : "Fetch now");
@@ -62,11 +85,13 @@ VIEWS.search = async (ctx) => {
       : "Not fetched yet. The service account must be added as a user on the property in Search Console (Settings → Users and permissions). The property is detected from the site URL, or set it in Settings."));
   const index = await indexCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Index status"), h("p", { class: "hint" }, e.message)));
   if (!d.connected) return [head, index];
+  const decay = await decayCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Content decay"), h("p", { class: "hint" }, e.message)));
   const base = ctx.project.start_url, t = d.totals;
   const tile = (k, v) => h("div", { class: "card stat" }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
   return [head, index,
     h("div", { class: "grid g4" }, tile("Clicks", num(t.clicks)), tile("Impressions", num(t.impressions)), tile("CTR", `${((t.ctr || 0) * 100).toFixed(2)}%`), tile("Average position", pos(t.position))),
     h("div", { class: "grid g4" }, tile("Keywords with impressions", num(d.keywords)), tile("Keywords in top 3", num(d.top3)), tile("Keywords in top 10", num(d.top10)), tile("Pages with impressions", num(d.topPages.length >= 100 ? "100+" : d.topPages.length))),
+    decay,
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Clicks per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.clicks, sub: `${num(r.impressions)} impressions` })), { max: null, label: "Clicks per day" })),
       h("div", { class: "card" }, h("h2", {}, "Impressions per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.impressions, sub: `position ${pos(r.position)}` })), { max: null, fmt: num, label: "Impressions per day" }))),
