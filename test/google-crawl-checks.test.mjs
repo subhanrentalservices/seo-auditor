@@ -213,3 +213,13 @@ test("head_closed_early: a tag manager <iframe> (or a tracking <img>) inside <no
   const ok = `<!doctype html><html><head><noscript><link rel="stylesheet" href="/a.css"><style>.x{}</style></noscript><link rel="canonical" href="https://example.com/a"></head><body></body></html>`;
   assert.equal(headClosedEarly(ok), null);
 });
+
+test("hreflang codes: Google supports ISO 639-1 + ISO 3166-1 alpha-2 only (es-419 is named as unsupported)", async () => {
+  const { hreflangCodeProblem } = await import("../src/crawler.mjs");
+  for (const ok of ["en", "en-GB", "en-au", "zh-Hant-TW", "x-default", "pt-BR"]) assert.equal(hreflangCodeProblem(ok), null, ok);
+  assert.match(hreflangCodeProblem("es-419"), /numeric regions/);
+  assert.match(hreflangCodeProblem("en-UK"), /GB/);
+  assert.match(hreflangCodeProblem("de-EU"), /not a country/);
+  assert.match(hreflangCodeProblem("es-LA"), /Laos/);
+  assert.match(hreflangCodeProblem("english"), /not language/);
+});

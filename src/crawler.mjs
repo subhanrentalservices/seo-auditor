@@ -17,6 +17,17 @@ const running = new Map(); // auditId -> { stop: bool }
 export const isRunning = (id) => running.has(id);
 export const stopAudit = (id) => { const r = running.get(id); if (r) r.stop = true; };
 
+/** Why Google can't use an hreflang value, or null. Google supports ISO 639-1 languages and ISO 3166-1 alpha-2
+ *  regions only: numeric regions such as es-419 are named as unsupported in its localized-versions docs. */
+const NOT_REGIONS = { UK: "use GB", EU: "EU is not a country", LA: "LA is Laos, not Latin America" };
+export function hreflangCodeProblem(code) {
+  if (/^x-default$/i.test(code)) return null;
+  const m = /^([a-z]{2,3})(?:-([a-z]{4}))?(?:-([a-z]{2}|\d{3}))?$/i.exec(code || "");
+  if (!m) return "not language[-REGION]";
+  if (m[3] && /^\d{3}$/.test(m[3])) return "numeric regions aren't supported by Google";
+  return m[3] ? NOT_REGIONS[m[3].toUpperCase()] || null : null;
+}
+
 export function normalize(u, base) {
   try {
     const x = new URL(u, base);
@@ -202,7 +213,7 @@ export function parseHtml(html, url) {
   const hl = $('link[rel="alternate"][hreflang]');
   if (hl.length) {
     const codes = hl.map((_, e) => $(e).attr("hreflang")).get();
-    const bad = codes.filter((c) => !/^([a-z]{2,3}(-[A-Za-z]{2}|-\d{3})?|x-default)$/i.test(c));
+    const bad = codes.filter((c) => hreflangCodeProblem(c)).map((c) => `${c} (${hreflangCodeProblem(c)})`);
     const self = hl.filter((_, e) => normalize($(e).attr("href"), url) === url).length;
     if (bad.length) d.hreflangBad = `invalid codes: ${bad.slice(0, 3).join(", ")}`;
     else if (!self) d.hreflangBad = "no self-referencing hreflang";
