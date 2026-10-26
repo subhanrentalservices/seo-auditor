@@ -49,7 +49,7 @@ test("img, iframe, span, a, section and stray text break the head; allowed eleme
     assert.ok(headClosedEarly(`<html><head><title>T</title>${bad}${CANON}</head><body></body></html>`), bad);
   const clean = `<html><head><meta charset="utf-8"><!-- <div>not real</div> --><title>A <div> in a title</title>
     <script>document.write("<div>in a script</div>"); if (a < b) {}</script><style>div > p { color: red }</style>
-    <noscript><img src="/pixel.gif"></noscript><template><div>t</div></template><base href="/"><link rel="stylesheet" href="/s.css">${CANON}${HREFLANG}${ROBOTS}</head><body><div>x</div></body></html>`;
+    <noscript><link rel="stylesheet" href="/ns.css"></noscript><template><div>t</div></template><base href="/"><link rel="stylesheet" href="/s.css">${CANON}${HREFLANG}${ROBOTS}</head><body><div>x</div></body></html>`;
   assert.equal(headClosedEarly(clean), null);
 });
 
@@ -202,4 +202,14 @@ test("raw vs rendered: identical pages and a canonical set only by JavaScript ar
   assert.equal(both(doc(""), doc(CANON)), "", "Google allows a canonical injected by JavaScript when the HTML has none");
   assert.match(pageIssues(page({ rawVsRendered: "JavaScript adds noindex that isn't in the raw HTML" }), {}).find(([id]) => id === "raw_vs_rendered")[1], /adds noindex/);
   assert.ok(!ids(pageIssues(page({}), {})).includes("raw_vs_rendered"), "nothing without rendering data");
+});
+
+test("head_closed_early: a tag manager <iframe> (or a tracking <img>) inside <noscript> in <head> closes the head; link/meta/style inside noscript don't", () => {
+  const gtm = `<!doctype html><html><head><meta charset="utf-8"><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-X" height="0" width="0"></iframe></noscript>
+<link rel="canonical" href="https://example.com/a"><link rel="alternate" hreflang="en" href="https://example.com/a"></head><body></body></html>`;
+  const h = headClosedEarly(gtm);
+  assert.ok(h && /iframe> inside <noscript>/.test(h.element), JSON.stringify(h));
+  assert.match(headClosedEarly(`<html><head><noscript><img src="/px.gif"></noscript><link rel="canonical" href="https://example.com/a"></head></html>`).element, /img> inside <noscript>/);
+  const ok = `<!doctype html><html><head><noscript><link rel="stylesheet" href="/a.css"><style>.x{}</style></noscript><link rel="canonical" href="https://example.com/a"></head><body></body></html>`;
+  assert.equal(headClosedEarly(ok), null);
 });

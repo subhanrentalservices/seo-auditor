@@ -128,6 +128,14 @@ export function headClosedEarly(html) {
     if (name === "body") break;
     if (!HEAD_OK.has(name)) { brk = { element: `<${name}>`, at: i }; break; }
     i = m.index + m[0].length;
+    if (name === "noscript") {
+      // Parsed without scripting (as a crawler's first parse can be), <noscript> in <head> may only hold link, meta
+      // and style; anything else (e.g. a tag manager's <iframe>) closes the head (Google: Martin Splitt, Bastian Grimm).
+      const e = lower.indexOf("</noscript", i), inner = html.slice(i, e < 0 ? html.length : e);
+      const bad = /<([a-z][^\s/>]*)/gi; let t;
+      while ((t = bad.exec(inner))) if (!["link", "meta", "style"].includes(t[1].toLowerCase())) { brk = { element: `<${t[1].toLowerCase()}> inside <noscript>`, at: i + t.index }; break; }
+      if (brk) break;
+    }
     if (RAW_TEXT.has(name)) { const e = lower.indexOf("</" + name, i); i = e < 0 ? html.length : e; }
   }
   if (!brk) return null;
