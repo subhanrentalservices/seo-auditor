@@ -77,6 +77,49 @@ async function decayCards(ctx) {
     d.expected.length ? h("p", { class: "small" }, `Also without impressions, as expected (contact, legal, account pages): ${d.expected.map((r) => shortUrl(r.url, base)).join(", ")}.`) : null)];
 }
 
+// Query-page alignment (src/queries.mjs): the top search missing from the title/H1, question searches no heading answers,
+// the intent mix, and page pairs Google shows for largely the same searches.
+const INTENT = { question: "Question", comparison: "Comparison", transactional: "Transactional", navigational: "Brand (navigational)", informational: "No clear modifier" };
+const KEEP = { clicks: "more clicks", position: "better position", inlinks: "more internal links", tie: "even: your choice" };
+async function alignCards(ctx) {
+  const d = await api(`/api/projects/${ctx.project.id}/query-alignment`);
+  if (!d.connected) return [];
+  const base = ctx.project.start_url, pct = (n, t) => (t ? `${Math.round((100 * n) / t)}%` : "–");
+  const totalImpr = d.intents.reduce((n, b) => n + b.impressions, 0);
+  const noAudit = d.auditId ? null : h("p", { class: "small" }, "Run an audit first: titles, H1s and headings come from the latest finished audit.");
+  return [h("div", { class: "card" }, h("h2", {}, `Top query missing from the title/H1 (${d.titleGaps.length})`),
+    h("p", { class: "hint" }, `For each page with Search Console data (${d.pagesChecked} checked), its most-seen non-brand search and the words of it that neither the title nor the H1 uses. `,
+      "Words on most pages (brand, town) are ignored. Where the search is what the page is really about, say so in the searcher's words in the title or H1 and answer it on the page. ",
+      "If the page is about something else, leave the title alone and make sure a better page exists for that search. Never paste lists of keywords into titles or headings: that's keyword stuffing."), noAudit,
+    table([{ label: "Page", cls: "url", get: (r) => h("span", { title: `Title: ${r.title}\nH1: ${r.h1}` }, shortUrl(r.url, base)) }, { label: "Top search", key: "query" },
+      { label: "Impr.", num: true, get: (r) => num(r.impressions) }, { label: "Pos.", num: true, get: (r) => pos(r.position) },
+      { label: "Words not in title/H1", get: (r) => h("b", {}, r.missing.join(", ")) }, { label: "Intent", get: (r) => h("span", { class: "small" }, INTENT[r.intent]) }],
+    d.titleGaps, { empty: d.auditId ? "Every page's top search is already in its title or H1." : "No audit yet." })),
+  h("div", { class: "card" }, h("h2", {}, `Questions no heading answers (${d.questions.length})`),
+    h("p", { class: "hint" }, `Question searches with ${d.minQuestionImpressions}+ impressions where no H2/H3 on the ranking page asks or answers them. Where the page genuinely serves the question, `,
+      "add a short section that answers it directly under a heading in the searcher's words (that's also the passage AI answers quote). Skip questions the page can't answer well; a better page or a new one may suit them."),
+    d.noHeadingData ? h("p", { class: "small" }, `${d.noHeadingData} page(s) with question searches were audited before headings were stored: run a new audit to check them.`) : null,
+    table([{ label: "Question", key: "query" }, { label: "Ranking page", cls: "url", get: (r) => shortUrl(r.url, base) },
+      { label: "Impr.", num: true, get: (r) => num(r.impressions) }, { label: "Clicks", num: true, get: (r) => num(r.clicks) }, { label: "Pos.", num: true, get: (r) => pos(r.position) },
+      { label: "Headings on page", num: true, get: (r) => num(r.headings) }], d.questions, { empty: "Every question search with enough impressions has a heading that answers it." })),
+  h("div", { class: "card" }, h("h2", {}, "Search intent mix"),
+    h("p", { class: "hint" }, "Every search, tagged from its words: questions (how, what, why, can, should… or ending in ?), comparisons (vs, best, review, alternative, compare), ",
+      "transactional (price, cost, buy, book, quote, hire, near me, discount), brand searches, and the rest (no modifier: a service and a place, a product name, a topic). A question wants an answer, a comparison wants honest options, a price search wants prices or a clear way to get a quote: check the page Google shows for each matches what the searcher wants."),
+    table([{ label: "Intent", get: (r) => INTENT[r.intent] }, { label: "Searches", num: true, get: (r) => num(r.queries) }, { label: "Impr.", num: true, get: (r) => num(r.impressions) },
+      { label: "Share", num: true, get: (r) => pct(r.impressions, totalImpr) }, { label: "Clicks", num: true, get: (r) => num(r.clicks) }, { label: "CTR", num: true, get: (r) => (r.impressions ? `${(100 * r.clicks / r.impressions).toFixed(1)}%` : "–") },
+      { label: "Top searches", get: (r) => h("span", { class: "small" }, r.examples.join(" · ") || "–") }], d.intents)),
+  h("div", { class: "card" }, h("h2", {}, `Pages competing across many queries (${d.pairs.length})`),
+    h("p", { class: "hint" }, "Page pairs Google shows for largely the same non-brand searches: 3 or more shared, and at least half of the smaller page's impressions on them. ",
+      "Google usually shows only one, so they split clicks and links. Either merge the weaker page into the keeper (move anything unique, then 301) or make each page clearly answer a different search and link between them. ",
+      "Keeper: more clicks on the shared searches, then better position, then more internal links."),
+    table([{ label: "Keeper", cls: "url", get: (r) => shortUrl(r.keeper.url, base) }, { label: "Competing page", cls: "url", get: (r) => h("span", {}, shortUrl(r.other.url, base),
+      r.nearDuplicate ? h("span", { class: "badge warning", style: { marginLeft: "6px" }, title: "Also flagged as a near-duplicate in the latest audit" }, "near-duplicate") : null) },
+      { label: "Overlap", num: true, get: (r) => `${Math.round(r.share * 100)}%` }, { label: "Shared", num: true, get: (r) => num(r.shared) },
+      { label: "Shared searches", get: (r) => h("span", { class: "small" }, r.queries.join(" · ")) },
+      { label: "Why keeper", get: (r) => h("span", { class: "small", title: `${num(r.keeper.clicks)} vs ${num(r.other.clicks)} clicks, position ${pos(r.keeper.position)} vs ${pos(r.other.position)}, ${num(r.keeper.inlinks)} vs ${num(r.other.inlinks)} internal links` }, KEEP[r.reason]) }],
+    d.pairs, { empty: "No two pages share most of their searches." }))];
+}
+
 VIEWS.search = async (ctx) => {
   const d = await api(`/api/projects/${ctx.project.id}/gsc`);
   const btn = h("button", { class: "btn", onclick: () => gscRefresh(ctx, btn) }, d.connected ? "Refresh" : "Fetch now");
@@ -86,12 +129,13 @@ VIEWS.search = async (ctx) => {
   const index = await indexCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Index status"), h("p", { class: "hint" }, e.message)));
   if (!d.connected) return [head, index];
   const decay = await decayCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Content decay"), h("p", { class: "hint" }, e.message)));
+  const align = await alignCards(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Query-page alignment"), h("p", { class: "hint" }, e.message)));
   const base = ctx.project.start_url, t = d.totals;
   const tile = (k, v) => h("div", { class: "card stat" }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
   return [head, index,
     h("div", { class: "grid g4" }, tile("Clicks", num(t.clicks)), tile("Impressions", num(t.impressions)), tile("CTR", `${((t.ctr || 0) * 100).toFixed(2)}%`), tile("Average position", pos(t.position))),
     h("div", { class: "grid g4" }, tile("Keywords with impressions", num(d.keywords)), tile("Keywords in top 3", num(d.top3)), tile("Keywords in top 10", num(d.top10)), tile("Pages with impressions", num(d.topPages.length >= 100 ? "100+" : d.topPages.length))),
-    decay,
+    decay, align,
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Clicks per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.clicks, sub: `${num(r.impressions)} impressions` })), { max: null, label: "Clicks per day" })),
       h("div", { class: "card" }, h("h2", {}, "Impressions per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.impressions, sub: `position ${pos(r.position)}` })), { max: null, fmt: num, label: "Impressions per day" }))),
