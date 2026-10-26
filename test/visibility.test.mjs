@@ -103,3 +103,42 @@ test("a run without a DataForSEO login stops before it starts", async () => {
   const { all } = await import("../src/db.mjs");
   assert.equal(all("SELECT id FROM ai_runs WHERE project_id=970").length, 0);
 });
+
+test("a run the budget stopped can be finished without buying the answered checks again (REQ-037)", async () => {
+  const { run, all, get } = await import("../src/db.mjs");
+  const { saveConfig } = await import("../src/dataforseo.mjs");
+  const { resumeRun } = await import("../src/visibility.mjs");
+  const p = { id: 980, name: "Acme Motors", start_url: "https://acmemotors.com.au/", settings: "{}" };
+  run("INSERT INTO projects (id, name, start_url) VALUES (980, 'Acme Motors', 'https://acmemotors.com.au/')");
+  for (let i = 1; i <= 6; i++) run("INSERT INTO ai_prompts (project_id, prompt) VALUES (980, ?)", `smash repairs ${i}`);
+  const spent = get("SELECT COALESCE(SUM(cost),0) s FROM dfs_costs WHERE ts >= strftime('%Y-%m-01','now')").s;
+  saveConfig({ dfsLogin: "test", dfsPassword: "test", dfsMonthlyBudget: spent + 0.012 });
+  const real = globalThis.fetch, asked = [];
+  globalThis.fetch = async (url, o) => { asked.push(JSON.parse(o.body)[0].user_prompt); await new Promise((r) => setTimeout(r, 5));
+    return { json: async () => ({ status_code: 20000, cost: 0.006, tasks: [{ status_code: 20000, result: [perplexity("**Acme Motors** is a good pick.", ["https://acmemotors.com.au/"])] }] }) }; };
+  const done = async (id) => { while (get("SELECT status FROM ai_runs WHERE id=?", id).status === "running") await new Promise((r) => setTimeout(r, 10)); return get("SELECT * FROM ai_runs WHERE id=?", id); };
+  try {
+    const { runId } = await startRun(p, ["perplexity"]);
+    const first = await done(runId);
+    assert.equal(first.status, "stopped");
+    const answered = all("SELECT prompt FROM ai_results WHERE run_id=? AND error IS NULL", runId).map((r) => r.prompt);
+    assert.ok(answered.length >= 2 && answered.length < 6, `stopped part-way (${answered.length} answered)`);
+    await assert.rejects(resumeRun(p, runId + 99), /Run not found/);
+    saveConfig({ dfsMonthlyBudget: spent + 1 });
+    asked.length = 0;
+    const r = await resumeRun(p, runId);
+    assert.equal(r.calls, 6 - answered.length);
+    const end = await done(runId);
+    assert.equal(end.status, "done");
+    assert.equal(end.message, null);
+    assert.deepEqual(asked.filter((q) => answered.includes(q)), [], "nothing already answered is bought again");
+    const rows = all("SELECT prompt, error, mentioned FROM ai_results WHERE run_id=?", runId);
+    assert.equal(rows.length, 6, "one row per prompt: the budget errors are replaced");
+    assert.ok(rows.every((x) => !x.error && x.mentioned === 1));
+    assert.ok(Math.abs(end.cost - 6 * 0.006) < 1e-9, "the run's cost covers both parts");
+    await assert.rejects(resumeRun(p, runId), /Only a stopped or failed run/);
+  } finally {
+    globalThis.fetch = real;
+    saveConfig({ dfsLogin: "", dfsPassword: "", dfsMonthlyBudget: 2 });
+  }
+});

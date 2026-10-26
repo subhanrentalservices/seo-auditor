@@ -35,6 +35,18 @@ VIEWS.visibility = async (ctx) => {
       h("input", { type: "checkbox", checked: true, onchange: (e) => { e.target.checked ? chosen.add(k) : chosen.delete(k); updateEst(); } }), `${p.label} ($${p.cost})`)), runBtn, est),
     st ? h("p", { class: "small muted", style: { marginBottom: 0 } }, `DataForSEO this month: $${st.spent.toFixed(3)} of $${st.budget.toFixed(2)} budget`) : null);
   if (!d.last) return [head, prompts];
+  // A run the budget stopped can be finished: only the checks it has no answer for are bought.
+  if (["stopped", "failed"].includes(d.last.status) && !d.running) {
+    const have = new Set(d.results.filter((r) => !r.error).map((r) => `${r.platform}\n${r.prompt}`));
+    const todo = d.prompts.flatMap((p) => d.last.platforms.split(",").filter((k) => d.platforms[k] && !have.has(`${k}\n${p.prompt}`)).map((k) => d.platforms[k].cost));
+    if (todo.length) head.append(h("div", { class: "row", style: { marginTop: "8px" } },
+      h("span", { class: "small down" }, `Last run ${d.last.status}${d.last.message ? `: ${d.last.message}` : ""}. ${todo.length} checks missing ≈ $${todo.reduce((a, b) => a + b, 0).toFixed(3)}.`),
+      h("button", { class: "btn", onclick: async (e) => {
+        const btn = e.currentTarget; btn.disabled = true;
+        try { const r = await api(`/api/projects/${pid}/visibility/runs/${d.last.id}/resume`, { method: "POST", body: {} }); toast(`Finishing: ${r.calls} checks…`); runBtn.disabled = true; poll(); }
+        catch (err) { toast(err.message); btn.disabled = false; }
+      } }, "Finish this run")));
+  }
 
   const R = Object.fromEntries(d.last.rates.map((r) => [r.platform, r]));
   const tiles = Object.entries(d.platforms).filter(([k]) => R[k]).map(([k, p]) => {

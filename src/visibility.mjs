@@ -157,20 +157,45 @@ const CHECK = { chatgpt: checkChatGpt, google: checkGoogle, ai_mode: checkAiMode
 const COUNTRY_LEVEL = new Set(["chatgpt", "perplexity", "gemini"]); // these take a country, not a city
 
 const runningRuns = new Set();
+const ready = (project) => {
+  if (runningRuns.has(project.id)) throw Object.assign(new Error("A visibility run is already in progress"), { status: 409 });
+  if (!dfsConfigured()) throw Object.assign(new Error("DataForSEO login not found. Add it in Settings → DataForSEO."), { status: 400 });
+};
+
 export async function startRun(project, platforms) {
   const prompts = all("SELECT prompt FROM ai_prompts WHERE project_id=? ORDER BY id", project.id).map((r) => r.prompt);
   platforms = platforms.filter((p) => CHECK[p]);
   if (!prompts.length) throw Object.assign(new Error("Add some prompts first"), { status: 400 });
   if (!platforms.length) throw Object.assign(new Error("Pick at least one platform"), { status: 400 });
-  if (runningRuns.has(project.id)) throw Object.assign(new Error("A visibility run is already in progress"), { status: 409 });
-  if (!dfsConfigured()) throw Object.assign(new Error("DataForSEO login not found. Add it in Settings → DataForSEO."), { status: 400 });
+  ready(project);
+  const runId = Number(run("INSERT INTO ai_runs (project_id, status, platforms, prompts) VALUES (?, 'running', ?, ?)", project.id, platforms.join(","), prompts.length).lastInsertRowid);
+  return execute(project, runId, prompts.flatMap((p) => platforms.map((pl) => [p, pl])), 0);
+}
+
+/** Finish a run the budget (or a crash) stopped: only the prompt × platform checks it has no answer for are run, into
+ *  the same run, so nothing already paid for is bought twice and the run stays one comparable snapshot. Failed checks
+ *  are retried; prompts deleted since are skipped. */
+export async function resumeRun(project, runId) {
+  const r = get("SELECT * FROM ai_runs WHERE id=? AND project_id=?", Number(runId), project.id);
+  if (!r) throw Object.assign(new Error("Run not found"), { status: 404 });
+  if (!["stopped", "failed"].includes(r.status)) throw Object.assign(new Error("Only a stopped or failed run can be finished"), { status: 400 });
+  ready(project);
+  const have = new Set(all("SELECT prompt, platform FROM ai_results WHERE run_id=? AND error IS NULL", r.id).map((x) => `${x.platform}\n${x.prompt}`));
+  const prompts = all("SELECT prompt FROM ai_prompts WHERE project_id=? ORDER BY id", project.id).map((x) => x.prompt);
+  const jobs = prompts.flatMap((p) => r.platforms.split(",").filter((pl) => CHECK[pl] && !have.has(`${pl}\n${p}`)).map((pl) => [p, pl]));
+  if (!jobs.length) throw Object.assign(new Error("This run has an answer for every check already"), { status: 400 });
+  run("DELETE FROM ai_results WHERE run_id=? AND error IS NOT NULL", r.id);
+  run("UPDATE ai_runs SET status='running', message=NULL, finished_at=NULL WHERE id=?", r.id);
+  return execute(project, r.id, jobs, r.cost || 0);
+}
+
+function execute(project, runId, jobs, costBefore) {
   const s = projectSettings(project);
   const country = Number(s.dfsLocation) || 2036;
   const local = Number(s.aiLocation) || country; // city-level location for Google; ChatGPT only takes countries
   const b = brandMatcher(project);
-  const runId = Number(run("INSERT INTO ai_runs (project_id, status, platforms, prompts) VALUES (?, 'running', ?, ?)", project.id, platforms.join(","), prompts.length).lastInsertRowid);
   const spentBefore = get("SELECT COALESCE(SUM(cost),0) s FROM dfs_costs").s;
-  const jobs = prompts.flatMap((p) => platforms.map((pl) => [p, pl]));
+  const total = jobs.length;
   runningRuns.add(project.id);
   (async () => {
     let done = 0, stopped = null;
@@ -187,17 +212,17 @@ export async function startRun(project, platforms) {
           ins.run(runId, prompt, pl, null, null, null, null, null, null, "[]", "[]", "", null, e.message.slice(0, 300));
         }
         done++;
-        emit({ type: "phase", projectId: project.id, auditId: null, phase: `AI visibility ${done}/${prompts.length * platforms.length}` });
+        emit({ type: "phase", projectId: project.id, auditId: null, phase: `AI visibility ${done}/${total}` });
       }
     };
     await Promise.all([worker(), worker(), worker()]);
-    const cost = get("SELECT COALESCE(SUM(cost),0) s FROM dfs_costs").s - spentBefore;
+    const cost = costBefore + get("SELECT COALESCE(SUM(cost),0) s FROM dfs_costs").s - spentBefore;
     run("UPDATE ai_runs SET status=?, finished_at=datetime('now'), cost=?, message=? WHERE id=?", stopped ? "stopped" : "done", cost, stopped, runId);
     runningRuns.delete(project.id);
     emit({ type: "phase", projectId: project.id, auditId: null, phase: null });
     emit({ type: "visibility", projectId: project.id, runId });
   })().catch((e) => { runningRuns.delete(project.id); run("UPDATE ai_runs SET status='failed', message=? WHERE id=?", e.message, runId); });
-  return { runId, calls: prompts.length * platforms.length };
+  return { runId, calls: total };
 }
 
 export function visibilityData(projectId) {
@@ -231,4 +256,5 @@ export function register({ routes }) {
   }]);
   routes.push(["DELETE", /^\/api\/projects\/(\d+)\/visibility\/prompts\/(\d+)$/, ([id, pid]) => { run("DELETE FROM ai_prompts WHERE project_id=? AND id=?", project(id).id, Number(pid)); return { ok: true }; }]);
   routes.push(["POST", /^\/api\/projects\/(\d+)\/visibility\/run$/, ([id], q, body) => startRun(project(id), Array.isArray(body.platforms) ? body.platforms.map(String) : Object.keys(PLATFORMS))]);
+  routes.push(["POST", /^\/api\/projects\/(\d+)\/visibility\/runs\/(\d+)\/resume$/, ([id, rid]) => resumeRun(project(id), Number(rid))]);
 }
