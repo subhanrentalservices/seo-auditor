@@ -76,7 +76,9 @@ async function page2Cards(ctx) {
       mark(!t.toLink, t.toLink ? `${t.toLink} related page${t.toLink === 1 ? " mentions" : "s mention"} it without a link in the text: add one where the sentence fits.` : "Every related page already links to it from its text."),
       mark(!t.anchorGap, t.anchorGap ? `No text link to it uses “${t.keyWords.join(" ")}”. Reword one or two of them (vary it, don't repeat the exact search everywhere).` : `Text links already use “${t.keyWords.join(" ")}”.`),
       t.anchors.length ? h("p", { class: "small muted", style: { margin: "0 0 4px 18px" } }, "Link words now: ", t.anchors.slice(0, 5).map((x) => `“${x.text.slice(0, 50)}” ×${x.n}`).join(", ")) : null,
-      mark(!t.titleMissing.length, t.titleMissing.length ? `Title lacks “${t.titleMissing.join(" ")}”. Add it only if the page really is about that and the title stays within 65 characters.` : "The title has the search's words."),
+      t.betterPage
+        ? mark(t.betterPage.linked === "body", `Title lacks “${t.titleMissing.join(" ")}”, but don't add it here: ${shortUrl(t.betterPage.url, base)} is your page about “${t.betterPage.covers.join(" ")}”, and stuffing it into this title is what Google calls keyword stuffing. Strengthen that page for this search (mention the area only if it's true) and ${t.betterPage.linked === "body" ? "keep this page's text link to it." : "link to it from this page's text."}`)
+        : mark(!t.titleMissing.length, t.titleMissing.length ? `Title lacks “${t.titleMissing.join(" ")}”. Add it only if the page really is about that and the title stays within 65 characters.` : "The title has the search's words."),
       // A list, not a table: a page, its link status and a sentence read well at phone width too.
       t.sources.length ? h("div", { style: { marginTop: "8px" } }, h("div", { class: "small muted", style: { marginBottom: "2px" } }, "Your pages about it"),
         t.sources.map((s) => { const [c, l] = LINKED[s.linked || "none"];

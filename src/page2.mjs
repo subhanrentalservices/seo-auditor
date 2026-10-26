@@ -110,8 +110,27 @@ export function page2Opportunities(auditId, { min = 8, max = 20, minImpressions 
     const anchors = new Map();
     for (const l of toTarget) if (l.placement !== "nav" && l.anchor) anchors.set(l.anchor.toLowerCase(), (anchors.get(l.anchor.toLowerCase()) || 0) + 1);
     const anchorList = [...anchors].sort((x, y) => y[1] - x[1]).map(([text, n]) => ({ text, n }));
+    // Step 3 of the method ("put the keyword in the stuck page's title") is wrong when the missing words are another
+    // page's topic: "mercedes mechanic riverside" on a suburb page, while the site has a Mercedes page. Adding "mercedes"
+    // to the suburb title is keyword stuffing; the dedicated page is the one to strengthen and link to. The first missing
+    // word is the topic ("mercedes" in "mercedes mechanic", "log" in "log book"), so the other page's title must have it,
+    // plus at least half of the missing words. Site-wide words (town, brand) never decide it.
+    const gap = [...new Set(words(q))].filter((w) => !titleWords.has(w) && !siteWide.has(w));
+    let better = null;
+    if (gap.length) for (const s of usable) {
+      const src = s.final_url || s.url;
+      if (ids.has(src.replace(/\/$/, ""))) continue;
+      const tw = new Set(words(s.title)), covers = gap.filter((w) => tw.has(w));
+      if (!tw.has(gap[0]) || covers.length * 2 < gap.length) continue;
+      if (!better || covers.length > better.covers.length || (covers.length === better.covers.length && s.inlinks > better.inlinks)) better = { url: src, title: s.title || "", covers, inlinks: s.inlinks };
+    }
+    if (better) {
+      const out_ = links.filter((l) => ids.has(l.from_url.replace(/\/$/, "")) && l.to_url.replace(/\/$/, "") === better.url.replace(/\/$/, ""));
+      better.linked = out_.some((l) => l.placement === "content") ? "body" : out_.some((l) => l.placement === null) ? "yes" : out_.length ? "menu" : null;
+      better.covers = [...new Set(norm(q).split(" ").filter((w) => better.covers.includes(stem(w))))]; // as typed, not stemmed
+    }
     out.push({
-      target, title: g.page.title || "", inlinks: g.page.inlinks, queries: g.queries.slice(0, 5), query: q,
+      target, title: g.page.title || "", inlinks: g.page.inlinks, queries: g.queries.slice(0, 5), query: q, betterPage: better,
       titleMissing: [...new Set(norm(q).split(" ").filter((w) => w && !STOP.has(w) && !titleWords.has(stem(w))))],
       anchors: anchorList.slice(0, 8), keyWords: norm(q).split(" ").filter((w) => w && !STOP.has(w) && coreWords.includes(stem(w))),
       anchorGap: !anchorList.some((x) => coreWords.every((w) => words(x.text).includes(w))),

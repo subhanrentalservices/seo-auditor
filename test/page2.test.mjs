@@ -76,3 +76,23 @@ test("report: related pages without a text link, link words and title for a page
   assert.deepEqual(t.anchors, [{ text: "not-at-fault claims", n: 1 }], "menu anchors are not counted");
   assert.deepEqual(t.titleMissing, ["car", "repairs"]);
 });
+
+test("report: a brand search on a suburb page points to the brand page instead of the suburb page's title (REQ-036)", () => {
+  const S = "https://y.com";
+  run("INSERT INTO projects (id, name, start_url) VALUES (960, 'Bolt Garage', 'https://y.com/')");
+  run("INSERT INTO audits (id, project_id, status) VALUES (961, 960, 'done')");
+  const page = (p, title, inlinks = 3) => run("INSERT INTO pages (audit_id, url, final_url, status, indexable, content_type, title, inlinks, data) VALUES (961,?,?,200,1,'text/html',?,?,'{}')", S + p, S + p, title, inlinks);
+  page("/", "Bolt Garage"); page("/riverside.html", "Mechanic Riverside | Bolt Garage"); page("/mercedes.html", "Mercedes-Benz Service | Bolt Garage", 9);
+  page("/logbook.html", "Logbook Service | Bolt Garage"); page("/booking-tips.html", "Book Your Service Early | Bolt Garage");
+  for (const p of ["/", "/riverside.html", "/mercedes.html", "/logbook.html", "/booking-tips.html"]) run("INSERT INTO page_text (audit_id, url, text) VALUES (961, ?, 'Servicing and repairs.')", S + p);
+  const link = (from, to, placement) => run("INSERT INTO links (audit_id, from_url, to_url, anchor, internal, nofollow, kind, placement) VALUES (961,?,?,'x',1,0,'a',?)", S + from, S + to, placement);
+  link("/riverside.html", "/mercedes.html", "nav");
+  run("INSERT INTO gsc (project_id, url, start_date, end_date) VALUES (960, ?, '2026-09-26', '2026-10-23')", S + "/riverside.html");
+  const q = (query, p, impressions, position) => run("INSERT INTO gsc_queries (project_id, query, page, clicks, impressions, ctr, position) VALUES (960,?,?,0,?,0,?)", query, S + p, impressions, position);
+  q("mercedes mechanic riverside", "/riverside.html", 24, 17.4); q("log book service", "/logbook.html", 9, 14.4);
+
+  const r = page2Opportunities(961), by = Object.fromEntries(r.targets.map((t) => [t.target.replace(S, ""), t]));
+  assert.deepEqual(by["/riverside.html"].titleMissing, ["mercedes"]);
+  assert.deepEqual({ ...by["/riverside.html"].betterPage, inlinks: undefined }, { url: S + "/mercedes.html", title: "Mercedes-Benz Service | Bolt Garage", covers: ["mercedes"], inlinks: undefined, linked: "menu" });
+  assert.equal(by["/logbook.html"].betterPage, null, "“Book your service” is not the page about “log book”");
+});
