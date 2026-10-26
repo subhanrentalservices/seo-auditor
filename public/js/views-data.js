@@ -1,6 +1,7 @@
 // Data screens: Search Console now; keywords, backlinks, AI visibility and report are added below by T11–T13.
 import { h, api, toast, num, shortUrl, lineChart, table, mount } from "./core.js";
 import { VIEWS, NAV, overviewCards } from "./views.js";
+import { findingsCard, appearanceCard, targetsCard, trendExtras, leadTxt, siteChangesCell } from "./views-search.js";
 
 const at = (view) => NAV.findIndex((n) => n.view === view);
 NAV.splice(at("history"), 0, { section: "Search data" }, { view: "search", label: "Search Console" });
@@ -91,7 +92,7 @@ async function alignCards(ctx) {
   const base = ctx.project.start_url, pct = (n, t) => (t ? `${Math.round((100 * n) / t)}%` : "–");
   const totalImpr = d.intents.reduce((n, b) => n + b.impressions, 0);
   const noAudit = d.auditId ? null : h("p", { class: "small" }, "Run an audit first: titles, H1s and headings come from the latest finished audit.");
-  return [h("div", { class: "card" }, h("h2", {}, `Top query missing from the title/H1 (${d.titleGaps.length})`),
+  return [targetsCard(d.targets, base), h("div", { class: "card" }, h("h2", {}, `Top query missing from the title/H1 (${d.titleGaps.length})`),
     h("p", { class: "hint" }, `For each page with Search Console data (${d.pagesChecked} checked), its most-seen non-brand search and the words of it that neither the title nor the H1 uses. `,
       "Words on most pages (brand, town) are ignored. Where the search is what the page is really about, say so in the searcher's words in the title or H1 and answer it on the page. ",
       "If the page is about something else, leave the title alone and make sure a better page exists for that search. Never paste lists of keywords into titles or headings: that's keyword stuffing."), noAudit,
@@ -126,7 +127,7 @@ async function alignCards(ctx) {
 
 // Search trend (src/trends.mjs): 16 months by week, brand vs non-brand, change on last year by month, drops explained.
 const SEG = { brand: "brand searches", nonbrand: "non-brand searches", mobile: "mobile", desktop: "desktop", tablet: "tablet" };
-const DROP_BADGE = { seasonal: "notice", "after a Google update": "warning", unexplained: "error" };
+const DROP_BADGE = { seasonal: "notice", "after a Google update": "warning", "during a Google incident": "notice", unexplained: "error" };
 const pctTxt = (p) => (p === null || p === undefined ? "–" : `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(Math.round(p * 100))}%`);
 const fmtWeek = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit", timeZone: "UTC" });
 const fmtMonth = (m) => new Date(m + "-01T00:00:00Z").toLocaleDateString("en-AU", { month: "short", year: "numeric", timeZone: "UTC" });
@@ -147,8 +148,9 @@ async function trendCard(ctx) {
         : "No brand split: the project name and domain are too short to tell brand searches apart; add names under Settings → Brand names. ",
       d.error ? `The last refresh could not update this card (${d.error}); showing the previous data.` : ""),
     split ? h("div", { class: "grid g2" }, chart("Non-brand clicks per week", w.nonbrand || []), chart("Brand clicks per week", w.brand || [])) : chart("Clicks per week", w.all),
-    h("p", { class: "small" }, "Confirmed Google updates in this period: ", d.updates.length ? d.updates.map((u) => `${u.name} (${fmtWeek(u.start)})`).join(" · ") : "none on the list",
-      ". Source: ", h("a", { href: d.source, target: "_blank", rel: "noopener" }, "Google Search Status Dashboard"), " (the list is src/google-updates.json; add new updates there)."),
+    h("p", { class: "small" }, "Confirmed Google updates in this period: ", d.updates.length ? d.updates.map((u) => `${u.name} (${fmtWeek(u.start)})${u.fromFeed ? " [feed]" : ""}`).join(" · ") : "none on the list",
+      ". Source: ", h("a", { href: d.source, target: "_blank", rel: "noopener" }, "Google Search Status Dashboard"), " (hand-curated list: src/google-updates.json; [feed] = added from the dashboard's feed)."),
+    ...trendExtras(d),
     h("h3", { style: { marginTop: "12px" } }, "Change on last year, by month"),
     d.hasYoy ? table([{ label: "Month", get: (r) => `${fmtMonth(r.month)}${r.partial ? ` (${Number(r.from.slice(8))}–${Number(r.to.slice(8))})` : ""}` },
       { label: "Clicks", num: true, get: (r) => num(r.clicks) }, { label: "Last year", num: true, get: (r) => num(r.lastYear.clicks) }, { label: "Change", num: true, get: (r) => pctTxt(r.clicksPct) },
@@ -156,10 +158,15 @@ async function trendCard(ctx) {
       : h("p", { class: "small" }, `Less than a year of data (${months} months since the first impression), so there is no last year to compare with yet. Month-by-month change appears once the same month last year is in the data.`),
     h("h3", { style: { marginTop: "12px" } }, `What changed (${d.drops.length})`),
     h("p", { class: "hint" }, "Weeks with clicks (impressions when clicks are very few) at least 20% below the week before and below the same week last year. ",
-      "Seasonal: last year fell in the same weeks too. After a Google update: it starts within 5 days of a confirmed update's start; compare the pages that lost with the ones now above them. Unexplained: check tracking, indexing, outages and recent site changes first."),
+      "Seasonal: last year fell in the same weeks too. After a Google update: it starts within 5 days of a confirmed update's start; compare the pages that lost with the ones now above them. ",
+      "During a Google incident: a crawling, indexing or serving incident on the Search Status Dashboard was open then (probably not your site). Unexplained: check tracking, indexing, outages and recent site changes first. ",
+      "Country and section are named only with 100+ impressions the week before; \"Audits saw\" lists robots.txt blocks, pages turned non-indexable and new 5xx from audits in the 14 days before to the end of the drop."),
     table([{ label: "From", get: (r) => fmtWeek(r.start) }, { label: "Change", num: true, get: change },
-      { label: "Likely reason", get: (r) => h("span", {}, h("span", { class: `badge ${DROP_BADGE[r.label]}` }, r.label), r.update ? h("div", { class: "small" }, r.update.name) : null) },
+      { label: "Likely reason", get: (r) => h("span", {}, h("span", { class: `badge ${DROP_BADGE[r.label]}` }, r.label), r.update ? h("div", { class: "small" }, r.update.name) : null,
+        r.incident ? h("div", { class: "small" }, h("a", { href: r.incident.source, target: "_blank", rel: "noopener" }, `${r.incident.name} (${r.incident.service})`)) : null) },
       { label: "Searches", get: (r) => h("span", { class: "small" }, seg(r.driver.query)) }, { label: "Device", get: (r) => h("span", { class: "small" }, seg(r.driver.device)) },
+      { label: "Country", get: (r) => h("span", { class: "small" }, leadTxt(r.driver.country)) }, { label: "Section", get: (r) => h("span", { class: "small" }, leadTxt(r.driver.section)) },
+      { label: "Audits saw", get: (r) => siteChangesCell(r.siteChanges, ctx.project.start_url) },
       { label: "Last year", get: (r) => h("span", { class: "small" }, r.yearAgoNote || `${pctTxt(r.yearAgo.change)} in the same weeks`) }],
     d.drops, { empty: "No drop of 20% or more in this period." }));
 }
@@ -256,14 +263,14 @@ VIEWS.search = async (ctx) => {
   const trend = await trendCard(ctx).catch((e) => h("div", { class: "card" }, h("h2", {}, "Search trend (16 months)"), h("p", { class: "hint" }, e.message)));
   const base = ctx.project.start_url, t = d.totals;
   const tile = (k, v) => h("div", { class: "card stat" }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
-  return [head, index,
+  return [head, findingsCard(d, base), index,
     h("div", { class: "grid g4" }, tile("Clicks", num(t.clicks)), tile("Impressions", num(t.impressions)), tile("CTR", `${((t.ctr || 0) * 100).toFixed(2)}%`), tile("Average position", pos(t.position))),
     h("div", { class: "grid g4" }, tile("Keywords with impressions", num(d.keywords)), tile("Keywords in top 3", num(d.top3)), tile("Keywords in top 10", num(d.top10)), tile("Pages with impressions", num(d.topPages.length >= 100 ? "100+" : d.topPages.length))),
     decay, align,
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("h2", {}, "Clicks per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.clicks, sub: `${num(r.impressions)} impressions` })), { max: null, label: "Clicks per day" })),
       h("div", { class: "card" }, h("h2", {}, "Impressions per day (90 days)"), lineChart(d.daily.map((r) => ({ x: fmtDay(r.date), y: r.impressions, sub: `position ${pos(r.position)}` })), { max: null, fmt: num, label: "Impressions per day" }))),
-    trend, changes,
+    trend, appearanceCard(d.appearance), changes,
     d.ctr ? h("div", { class: "card" }, h("h2", {}, "Why CTR is what it is"),
       h("p", { class: "hint" }, `${Math.round(d.ctr.deepShare * 100)}% of impressions come from position 21 or lower, where almost nobody clicks; there, CTR is a ranking problem, not a snippet problem. `,
         "Brand searches that are really for another business with a similar name also pull CTR down. Clicks on your Google Business Profile (calls, directions, website button) aren't counted here at all."),

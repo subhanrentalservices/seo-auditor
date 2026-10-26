@@ -3,10 +3,12 @@
 //   1. per page, its top non-brand search and the words of it that neither the title nor the H1 uses,
 //   2. question searches (10+ impressions) that no H2/H3 on the ranking page asks or answers,
 //   3. impressions and clicks per search intent (question, comparison, transactional, navigational, informational),
-//   4. page pairs Google shows for largely the same searches: merge (301 into the keeper) or make each page distinct.
+//   4. page pairs Google shows for largely the same searches: merge (301 into the keeper) or make each page distinct,
+//   5. target keywords the owner entered in Settings (REQ-044 row 56): impressions for searches containing all their
+//      words, and whether a crawled page names them in its title or H1 ("demand without a page" / "page not shown").
 // The fix is always to answer the search on the page where it genuinely serves the reader; never to paste keyword
 // lists into titles, headings or text (keyword stuffing).
-import { all, get } from "./db.mjs";
+import { all, get, projectSettings } from "./db.mjs";
 import { brandTest, mention, words, stem } from "./page2.mjs";
 import { joinCompounds } from "./topics.mjs";
 
@@ -99,6 +101,51 @@ export function overlapPairs(pages, { minShare = 0.5, minShared = 3, minImpressi
   return out.sort((x, y) => y.sharedImpressions - x.sharedImpressions);
 }
 
+// ---- Target keywords (Settings → Target keywords) ----
+/** One keyword per line (or comma/semicolon separated), lower case, duplicates out, at most 200 of up to 100 characters. */
+export function parseTargets(text) {
+  return [...new Set(String(text || "").split(/[\n\r,;]+/).map((s) => s.trim().replace(/\s+/g, " ").toLowerCase()).filter((s) => s && s.length <= 100 && words(s).length))].slice(0, 200);
+}
+
+/** Per target: searches (28-day query x page rows) containing all its words, stemmed; a 200 indexable page whose title
+ *  plus H1 has every word (titleGap, so "log book" also matches "logbook"). status: "shown" (impressions > 0),
+ *  "page-not-shown" (a page, no impressions) or "no-page" (neither: demand without a page). Brand targets are skipped. */
+export function targetGaps(targets, rows, pages, isBrand = () => false) {
+  const out = [], brand = [];
+  const usable = pages.filter((p) => p.status === 200 && p.indexable);
+  for (const keyword of targets) {
+    if (isBrand(keyword)) { brand.push(keyword); continue; }
+    const need = [...new Set(words(keyword))];
+    const hits = rows.filter((r) => { const w = new Set(words(r.query)); return need.every((x) => w.has(x)); });
+    const impressions = sum(hits), clicks = sum(hits, "clicks");
+    const byPage = new Map();
+    for (const r of hits) byPage.set(r.page, (byPage.get(r.page) || 0) + r.impressions);
+    const shownPage = [...byPage].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    const named = usable.filter((p) => !titleGap(keyword, p.title, p.h1).length).sort((a, b) => (b.inlinks || 0) - (a.inlinks || 0))[0];
+    const status = impressions > 0 ? "shown" : named ? "page-not-shown" : "no-page";
+    out.push({ keyword, status, impressions, clicks, position: wpos(hits), searches: new Set(hits.map((r) => r.query)).size,
+      page: impressions > 0 ? shownPage : named ? named.final_url || named.url : null, namedBy: named ? named.final_url || named.url : null });
+  }
+  return { targets: out, brand };
+}
+
+/** Target keywords of a project against its Search Console rows and latest audit; empty without targets or data. */
+export function targetReport(projectId) {
+  const p = get("SELECT * FROM projects WHERE id=?", Number(projectId));
+  const s = p ? projectSettings(p) : {};
+  const targets = parseTargets(s.targetKeywords);
+  const empty = { configured: targets.length > 0, connected: false, auditId: null, targets: [], brand: [] };
+  if (!p || !targets.length || !get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='gsc_queries'")) return empty;
+  const rows = all("SELECT query, page, clicks, impressions, position FROM gsc_queries WHERE project_id=?", p.id);
+  if (!rows.length) return empty; // Search Console not fetched: zero impressions would mean nothing
+  const audit = get("SELECT id FROM audits WHERE project_id=? AND status='done' ORDER BY id DESC LIMIT 1", p.id);
+  const pages = audit ? all("SELECT url, final_url, title, h1, inlinks, status, indexable FROM pages WHERE audit_id=? AND content_type LIKE '%html%'", audit.id) : [];
+  const base = brandTest(p.name, p.start_url);
+  const extra = String(s.brandTerms || "").split(",").map((t) => norm(t).replace(/ /g, "")).filter((t) => t.length >= 3);
+  const isBrand = (q) => base(q) || extra.some((t) => norm(q).replace(/ /g, "").includes(t));
+  return { configured: true, connected: true, auditId: audit?.id || null, ...targetGaps(targets, rows, pages, isBrand) };
+}
+
 export function queryAlignment(projectId, { minQuestionImpressions = 10, limit = 100 } = {}) {
   const project = get("SELECT id, name, start_url FROM projects WHERE id=?", Number(projectId)) || fail(404, "Project not found");
   const empty = { connected: false, range: null, auditId: null, pagesChecked: 0, titleGaps: [], questions: [], noHeadingData: 0, intents: [], pairs: [], minQuestionImpressions };
@@ -171,7 +218,7 @@ export function queryAlignment(projectId, { minQuestionImpressions = 10, limit =
     { inlinks: (u) => byKey.get(urlKey(u))?.inlinks || 0 });
   for (const x of pairs) x.nearDuplicate = near.has([urlKey(x.keeper.url), urlKey(x.other.url)].sort().join(" "));
 
-  return { connected: true, range, auditId: audit?.id || null, minQuestionImpressions, pagesChecked, noHeadingData,
+  return { connected: true, range, auditId: audit?.id || null, minQuestionImpressions, pagesChecked, noHeadingData, targets: targetReport(project.id),
     titleGaps: titleGaps.sort((x, y) => y.impressions - x.impressions).slice(0, limit),
     questions: questions.sort((x, y) => y.impressions - x.impressions).slice(0, limit), intents, pairs: pairs.slice(0, limit) };
 }

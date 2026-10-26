@@ -57,7 +57,7 @@ test("snapshot keeps types with counts, the snippet, PAA questions, our result a
   assert.deepEqual([s.types.paid, s.types.local_pack, s.types.organic, s.types.featured_snippet], [2, 2, 11, 1]);
   assert.equal(s.snippet.domain, "crashguide.com.au");
   assert.equal(s.paa.length, 4);
-  assert.deepEqual(s.own, { pos: 4, url: OWN });
+  assert.deepEqual(s.own, { pos: 4, url: OWN, title: "Smash Repairs Springfield | Acme Motors" }); // title: REQ-044 row 41
   assert.equal(s.top.length, 10);
   assert.equal(s.top.filter((x) => x.type === "directory").length, 7);
 });

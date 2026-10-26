@@ -1,5 +1,7 @@
 // Google Search Console via the existing service account (read-only scope). The key file is read at run time
-// from its own location and never copied. Stores page totals, query×page rows and a daily trend per project.
+// from its own location and never copied. Stores page totals, query×page rows and a daily trend per project (by device,
+// brand, and the top countries), search appearance per day (REQ-044 row 47), and on the same refresh updates the
+// cached Search Status Dashboard feed (status-feed.mjs, row 49). Findings from this data: gsc-findings.mjs.
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -8,6 +10,8 @@ import { db, all, get, run, ROOT, projectSettings, DATA } from "./db.mjs";
 import { afterAudit, phase } from "./runner.mjs";
 import { brandTerms, brandRegex } from "./trends.mjs";
 import { brandTest } from "./page2.mjs";
+import { refreshFeed } from "./status-feed.mjs";
+import { projectFindings, appearanceReport } from "./gsc-findings.mjs";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS gsc_queries (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -23,7 +27,11 @@ CREATE TABLE IF NOT EXISTS gsc_trend (project_id INTEGER NOT NULL REFERENCES pro
 CREATE TABLE IF NOT EXISTS gsc_page_daily (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   url TEXT NOT NULL, date TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, PRIMARY KEY (project_id, url, date));
 CREATE INDEX IF NOT EXISTS idx_gscpd_date ON gsc_page_daily(project_id, date);
+CREATE TABLE IF NOT EXISTS gsc_appearance (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  appearance TEXT NOT NULL, date TEXT NOT NULL, clicks INTEGER, impressions INTEGER, position REAL, PRIMARY KEY (project_id, appearance, date));
 `);
+const TOP_COUNTRIES = 10;   // countries kept in the trend (by impressions over the 16 months)
+const MAX_APPEARANCES = 12; // search appearance types fetched day by day (one call each)
 
 // Service-account key: App settings, else GSC_KEY_FILE, else ~/.config/claude-seo/gsc-service-account.json.
 const DEFAULT_KEY = process.env.GSC_KEY_FILE || path.join(os.homedir(), ".config", "claude-seo", "gsc-service-account.json");
@@ -43,30 +51,34 @@ export async function gsc(urlPath, body) {
   return res.data;
 }
 
-export async function listSites() { return ((await gsc("sites")).siteEntry || []).map((s) => s.siteUrl).sort(); }
+export async function listSites(call = gsc) { return ((await call("sites")).siteEntry || []).map((s) => s.siteUrl).sort(); }
 
 /** Matches a project URL to a property the account can read: exact URL-prefix property first, then domain property. */
-export async function detectProperty(startUrl) {
+export async function detectProperty(startUrl, call = gsc) {
   const u = new URL(startUrl); const host = u.hostname.replace(/^www\./, "");
-  const sites = await listSites();
+  const sites = await listSites(call);
   return sites.find((s) => s === `${u.origin}/`) || sites.find((s) => s === `sc-domain:${host}`) ||
     sites.find((s) => !s.startsWith("sc-domain:") && new URL(s).hostname.replace(/^www\./, "") === host) || null;
 }
 
 const iso = (d) => d.toISOString().slice(0, 10);
-async function query(property, body, max = 100000) {
+async function query(property, body, max = 100000, call = gsc) {
   const rows = [];
   for (let startRow = 0; startRow < max; startRow += 25000) {
-    const r = await gsc(`sites/${encodeURIComponent(property)}/searchAnalytics/query`, { ...body, rowLimit: 25000, startRow, dataState: "final" });
+    const r = await call(`sites/${encodeURIComponent(property)}/searchAnalytics/query`, { ...body, rowLimit: 25000, startRow, dataState: "final" });
     rows.push(...(r.rows || []));
     if (!r.rows || r.rows.length < 25000) break;
   }
   return rows;
 }
 
-export async function refresh(project) {
+/** call: the Search Console request function (tests pass a mock); fetchFn: fetch for the Status Dashboard feed. */
+export async function refresh(project, { call = gsc, fetchFn } = {}) {
   const s = projectSettings(project);
-  const property = s.gscProperty || (await detectProperty(project.start_url));
+  const q = (property, body, max) => query(property, body, max, call);
+  // Search Status Dashboard feed (one public GET, cached 12 h, never throws), alongside the Search Console calls.
+  const feedCall = refreshFeed(fetchFn ? { fetchFn } : {});
+  const property = s.gscProperty || (await detectProperty(project.start_url, call));
   if (!property) throw Object.assign(new Error("No Search Console property for this site is shared with the service account"), { status: 400 });
   const end = new Date(Date.now() - 3 * 864e5), start = new Date(end - 27 * 864e5), start90 = new Date(end - 89 * 864e5);
   const range = { startDate: iso(start), endDate: iso(end) };
@@ -80,23 +92,40 @@ export async function refresh(project) {
   const terms = brandTerms(project, s), brandRe = brandRegex(terms);
   const byQuery = (operator) => [{ filters: [{ dimension: "query", operator, expression: brandRe }] }];
   const trendCalls = Promise.all([
-    query(property, { ...hist, dimensions: ["date"] }),
-    query(property, { ...hist, dimensions: ["date", "device"] }),
-    brandRe ? query(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("includingRegex") }) : [],
-    brandRe ? query(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("excludingRegex") }) : [],
+    q(property, { ...hist, dimensions: ["date"] }),
+    q(property, { ...hist, dimensions: ["date", "device"] }),
+    brandRe ? q(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("includingRegex") }) : [],
+    brandRe ? q(property, { ...hist, dimensions: ["date"], dimensionFilterGroups: byQuery("excludingRegex") }) : [],
   ]).catch((e) => ({ error: e.message }));
   // Page × day for the same 16 months (change log, changes.mjs), paged 25,000 rows at a time. If it fails the rest of
   // the refresh still saves and the stored days are kept; days older than Search Console keeps are never deleted.
-  const pageDailyCall = query(property, { ...hist, dimensions: ["page", "date"] }, 500000).catch((e) => ({ error: e.message }));
-  const [pages, queries, daily, prevPages, yoyPages, trend, pageDaily] = await Promise.all([
-    query(property, { ...range, dimensions: ["page"] }),
-    query(property, { ...range, dimensions: ["query", "page"] }, 50000),
-    query(property, { startDate: iso(start90), endDate: iso(end), dimensions: ["date"] }),
-    query(property, { ...past.prev, dimensions: ["page"] }),
-    query(property, { ...past.yoy, dimensions: ["page"] }),
+  const pageDailyCall = q(property, { ...hist, dimensions: ["page", "date"] }, 500000).catch((e) => ({ error: e.message }));
+  // Countries for the same 16 months (row 48: some updates start in one country); only the top 10 are kept.
+  const countryCall = q(property, { ...hist, dimensions: ["date", "country"] }, 300000).catch((e) => ({ error: e.message }));
+  // Search appearance (row 47) over the last 90 days. Search Console can't group it with any other dimension, so: the
+  // list of appearance types first, then each type's days through a filter (one call per type, at most 12, in turn).
+  const days90 = { startDate: iso(start90), endDate: iso(end) };
+  const appearanceCall = (async () => {
+    const types = (await q(property, { ...days90, dimensions: ["searchAppearance"] })).sort((a, b) => b.impressions - a.impressions).slice(0, MAX_APPEARANCES);
+    const out = [];
+    for (const t of types) {
+      const filter = [{ filters: [{ dimension: "searchAppearance", operator: "equals", expression: t.keys[0] }] }];
+      for (const r of await q(property, { ...days90, dimensions: ["date"], dimensionFilterGroups: filter })) out.push({ appearance: t.keys[0], ...r });
+    }
+    return out;
+  })().catch((e) => ({ error: e.message }));
+  const [pages, queries, daily, prevPages, yoyPages, trend, pageDaily, countries, appearance] = await Promise.all([
+    q(property, { ...range, dimensions: ["page"] }),
+    q(property, { ...range, dimensions: ["query", "page"] }, 50000),
+    q(property, { startDate: iso(start90), endDate: iso(end), dimensions: ["date"] }),
+    q(property, { ...past.prev, dimensions: ["page"] }),
+    q(property, { ...past.yoy, dimensions: ["page"] }),
     trendCalls,
     pageDailyCall,
+    countryCall,
+    appearanceCall,
   ]);
+  const feed = await feedCall;
   db.exec("BEGIN");
   try {
     run("DELETE FROM gsc WHERE project_id=?", project.id);
@@ -111,15 +140,31 @@ export async function refresh(project) {
     const pp = db.prepare("INSERT OR REPLACE INTO gsc_pages_past (project_id,period,url,clicks,impressions,position,start_date,end_date) VALUES (?,?,?,?,?,?,?,?)");
     for (const [period, rows] of [["prev", prevPages], ["yoy", yoyPages]])
       for (const r of rows) pp.run(project.id, period, r.keys[0], r.clicks, r.impressions, r.position, past[period].startDate, past[period].endDate);
+    const it = db.prepare("INSERT OR REPLACE INTO gsc_trend (project_id,date,segment,clicks,impressions,position) VALUES (?,?,?,?,?,?)");
     if (Array.isArray(trend)) {
-      run("DELETE FROM gsc_trend WHERE project_id=?", project.id);
-      const it = db.prepare("INSERT OR REPLACE INTO gsc_trend (project_id,date,segment,clicks,impressions,position) VALUES (?,?,?,?,?,?)");
+      run("DELETE FROM gsc_trend WHERE project_id=? AND segment NOT LIKE 'country:%'", project.id);
       const [tAll, tDevice, tBrand, tNon] = trend;
       for (const r of tAll) it.run(project.id, r.keys[0], "all", r.clicks, r.impressions, r.position);
       for (const r of tDevice) it.run(project.id, r.keys[0], String(r.keys[1]).toLowerCase(), r.clicks, r.impressions, r.position);
       for (const r of tBrand) it.run(project.id, r.keys[0], "brand", r.clicks, r.impressions, r.position);
       for (const r of tNon) it.run(project.id, r.keys[0], "nonbrand", r.clicks, r.impressions, r.position);
     }
+    if (Array.isArray(countries)) {
+      run("DELETE FROM gsc_trend WHERE project_id=? AND segment LIKE 'country:%'", project.id);
+      const totals = new Map();
+      for (const r of countries) { const c = String(r.keys[1]).toLowerCase(); totals.set(c, (totals.get(c) || 0) + r.impressions); }
+      const keep = new Set([...totals].sort((a, b) => b[1] - a[1]).slice(0, TOP_COUNTRIES).map(([c]) => c));
+      for (const r of countries) { const c = String(r.keys[1]).toLowerCase(); if (keep.has(c)) it.run(project.id, r.keys[0], `country:${c}`, r.clicks, r.impressions, r.position); }
+    }
+    if (Array.isArray(appearance)) {
+      run("DELETE FROM gsc_appearance WHERE project_id=?", project.id);
+      const ia = db.prepare("INSERT OR REPLACE INTO gsc_appearance (project_id,appearance,date,clicks,impressions,position) VALUES (?,?,?,?,?,?)");
+      for (const r of appearance) ia.run(project.id, r.appearance, r.keys[0], r.clicks, r.impressions, r.position);
+    }
+    // A failed appearance fetch keeps the previous rows and dates; the findings skip gaps while the error stands.
+    const prevAp = get("SELECT value FROM meta WHERE key=?", `gsc-appearance:${project.id}`);
+    run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc-appearance:${project.id}`, JSON.stringify(Array.isArray(appearance)
+      ? { ...days90, fetchedAt: new Date().toISOString(), error: null } : { ...(prevAp ? JSON.parse(prevAp.value) : {}), error: appearance.error }));
     if (Array.isArray(pageDaily)) {
       run("DELETE FROM gsc_page_daily WHERE project_id=? AND date BETWEEN ? AND ?", project.id, hist.startDate, hist.endDate);
       const ipd = db.prepare("INSERT OR REPLACE INTO gsc_page_daily (project_id,url,date,clicks,impressions,position) VALUES (?,?,?,?,?,?)");
@@ -128,12 +173,14 @@ export async function refresh(project) {
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc-page-daily:${project.id}`,
       JSON.stringify({ ...hist, fetchedAt: new Date().toISOString(), error: Array.isArray(pageDaily) ? null : pageDaily.error }));
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc-trend:${project.id}`,
-      JSON.stringify({ ...hist, terms, fetchedAt: new Date().toISOString(), error: Array.isArray(trend) ? null : trend.error }));
+      JSON.stringify({ ...hist, terms, fetchedAt: new Date().toISOString(), error: Array.isArray(trend) ? null : trend.error,
+        countryError: Array.isArray(countries) ? null : countries.error }));
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc:${project.id}`, JSON.stringify({ property, fetchedAt: new Date().toISOString(), ...range }));
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
   return { property, pages: pages.length, queries: queries.length, days: daily.length, trendDays: Array.isArray(trend) ? trend[0].length : 0,
-    pageDayRows: Array.isArray(pageDaily) ? pageDaily.length : 0 };
+    pageDayRows: Array.isArray(pageDaily) ? pageDaily.length : 0, countryRows: Array.isArray(countries) ? countries.length : 0,
+    appearanceRows: Array.isArray(appearance) ? appearance.length : 0, statusFeed: { fetchedAt: feed.fetchedAt, error: feed.error } };
 }
 
 // Expected organic CTR by position on today's results pages (AI Overviews, local packs): the midpoint of 2026
@@ -186,6 +233,7 @@ export function summary(projectId) {
     FROM gsc_queries q WHERE project_id=? AND impressions >= 5
       AND impressions >= 0.15 * (SELECT SUM(impressions) FROM gsc_queries x WHERE x.project_id=q.project_id AND x.query=q.query)
     GROUP BY query HAVING COUNT(*) > 1 ORDER BY impressions DESC LIMIT 50`, projectId);
+  const appearance = appearanceReport(projectId); // rich result types (row 47), shared with the findings below
   const p = get("SELECT name, start_url FROM projects WHERE id=?", projectId);
   const isBrand = brandTest(p.name, p.start_url); // one brand rule for every screen (page2.mjs)
   for (const r of [...topQueries, ...quickWins, ...cannibal]) r.brand = isBrand(r.query);
@@ -194,7 +242,7 @@ export function summary(projectId) {
     keywords: get("SELECT COUNT(DISTINCT query) n FROM gsc_queries WHERE project_id=?", projectId).n,
     top3: get("SELECT COUNT(*) n FROM (SELECT query, SUM(position*impressions)/SUM(impressions) p FROM gsc_queries WHERE project_id=? GROUP BY query) WHERE p <= 3", projectId).n,
     top10: get("SELECT COUNT(*) n FROM (SELECT query, SUM(position*impressions)/SUM(impressions) p FROM gsc_queries WHERE project_id=? GROUP BY query) WHERE p <= 10", projectId).n,
-    daily, topQueries, topPages, quickWins, cannibal };
+    daily, topQueries, topPages, quickWins, cannibal, appearance, findings: projectFindings(projectId, appearance) };
 }
 
 export function register({ routes }) {

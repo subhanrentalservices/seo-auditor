@@ -23,7 +23,7 @@ function cleanSettings(input = {}) {
     const v = input[k];
     if (typeof def === "number") { const n = Number(v); if (Number.isFinite(n) && n >= 0) out[k] = Math.floor(n); }
     else if (typeof def === "boolean") out[k] = Boolean(v);
-    else out[k] = String(v ?? "").slice(0, 500);
+    else out[k] = String(v ?? "").slice(0, k === "targetKeywords" ? 4000 : 500);
   }
   if (out.concurrency !== undefined) out.concurrency = Math.min(Math.max(out.concurrency, 1), 20);
   if (out.schedule !== undefined && !["off", "daily", "weekly"].includes(out.schedule)) out.schedule = "off";

@@ -4,11 +4,16 @@
 //   a. a featured snippet held by another site while we rank 1-10,
 //   b. People Also Ask questions no H2/H3 on our ranking page answers (same matcher as the Search Console questions),
 //   c. a video result while our ranking page has no video embed,
-//   d. a page-type mismatch: most of the top 10 are directories/marketplaces or articles and our page is not that kind.
+//   d. a page-type mismatch: most of the top 10 are directories/marketplaces or articles and our page is not that kind,
+//   e. title_rewritten (REQ-044 row 41): the title Google showed for our URL against the page's <title> in the latest
+//      audit, after dropping a trailing "…", case and a brand segment; truncation (a prefix) is not a rewrite, and the
+//      rewrite needs a word overlap (Jaccard) under 0.6. Older snapshots have no own.title: the top-10 entry is used.
 // No new paid calls. Runs made before this version have no snapshot: the screen says so.
 import { all, get, projectSettings } from "./db.mjs";
 import { answeredBy, siteWideWords, urlKey } from "./queries.mjs";
 import { pageRoles } from "./conversion.mjs";
+import { words } from "./page2.mjs";
+import { brandTerms } from "./trends.mjs";
 
 // Directories, marketplaces, review sites, forums and video/encyclopedia sites, by the site's registrable name
 // ("yelp" matches yelp.com, m.yelp.com.au). Add more per project in settings.serpDirectories (comma list).
@@ -58,15 +63,46 @@ export function serpSnapshot(items, isOwn = () => false) {
   return { v: 1, types,
     snippet: fs ? { domain: host(fs.domain || fs.url), url: fs.url || null, title: fs.title || "" } : null,
     paa: [...new Set(paa)].slice(0, 12),
-    own: own ? { pos: own.rank_group ?? null, url: own.url || null } : null,
+    own: own ? { pos: own.rank_group ?? null, url: own.url || null, title: String(own.title || "").slice(0, 200) } : null,
     top: organic.filter((i) => !i.rank_group || i.rank_group <= 10).slice(0, 10).map((i) => ({ pos: i.rank_group ?? null, domain: host(i.domain || i.url),
       url: i.url || null, title: String(i.title || "").slice(0, 200), type: resultType(i) })) };
 }
 
+// ---- e. Title rewritten by Google ----
+const ELLIPSIS = /\s*(…|\.\.\.)\s*$/;
+const SEP = /\s+[|\-–—:·•»]\s+|\s*\|\s*|:\s+/; // "Title | Brand", "Brand - Title", "Brand: Title"
+const compactT = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+/** A title as comparable words: trailing ellipsis gone, brand segments ("… | Acme Motors", "Acme Motors - …") dropped
+ *  from either end (a segment that is the brand, or the brand plus a few characters such as a town). */
+export function titleCore(t, brand = []) {
+  const keys = brand.map(compactT).filter((k) => k.length >= 3);
+  const parts = String(t || "").replace(ELLIPSIS, "").split(SEP).map((x) => x.trim()).filter(Boolean);
+  const isBrand = (p) => { const c = compactT(p); return keys.some((k) => c.includes(k) && c.length <= k.length + 12); };
+  while (parts.length > 1 && isBrand(parts.at(-1))) parts.pop();
+  while (parts.length > 1 && isBrand(parts[0])) parts.shift();
+  return parts.join(" ").toLowerCase().replace(/[^a-z0-9&]+/g, " ").trim();
+}
+/** null when Google's title is the page title, a cut-off start of it, or close to it; else the rewrite and the word
+ *  overlap (Jaccard of stemmed non-stop words; under 0.6 counts as a rewrite). */
+export function titleRewrite(shown, pageTitle, brand = []) {
+  if (!shown || !pageTitle) return null;
+  const s = titleCore(shown, brand), p = titleCore(pageTitle, brand);
+  if (!s || !p || s === p) return null;
+  // Truncation: the shown words are the page title's first words (the last shown word may be cut mid-word).
+  const sw = s.split(" "), pw = p.split(" "), cut = ELLIPSIS.test(String(shown));
+  const head = cut ? sw.slice(0, -1) : sw;
+  if (head.length && head.every((w, i) => pw[i] === w) && (!cut || pw[head.length]?.startsWith(sw.at(-1)))) return null;
+  if (!cut && pw.slice(0, sw.length).join(" ") === s) return null;
+  const a = new Set(words(s)), b = new Set(words(p));
+  const inter = [...a].filter((w) => b.has(w)).length, union = new Set([...a, ...b]).size;
+  const similarity = union ? inter / union : 1;
+  return similarity < 0.6 ? { shown: String(shown).trim(), pageTitle: String(pageTitle).trim(), similarity } : null;
+}
+
 /** Per prompt flags, opportunities and site-wide feature counts. rows: [{prompt, organic_pos, serp}] (serp parsed, or
  *  null for a run made before snapshots were stored); pages: the latest audit's pages ({url, final_url, status, data})
- *  or []; start: the project's start URL. */
-export function serpOpportunities(rows, pages, start, { majority = 6, directories = [] } = {}) {
+ *  or []; start: the project's start URL; brand: brand names to strip from titles before comparing. */
+export function serpOpportunities(rows, pages, start, { majority = 6, directories = [], brand = [] } = {}) {
   const isOwn = ownTest(start), withData = rows.filter((r) => r.serp && r.serp.types);
   const byKey = new Map();
   for (const p of pages) for (const u of [p.url, p.final_url]) if (u && (!byKey.has(urlKey(u)) || p.status === 200)) byKey.set(urlKey(u), p);
@@ -111,8 +147,14 @@ export function serpOpportunities(rows, pages, start, { majority = 6, directorie
         ? `${n} of the top 10 are ${TYPE_LABELS.directory}; your ${ours === "article" ? "article" : "page"} competes with listings. Being listed (and reviewed) on those sites is the realistic way into this result.`
         : `${n} of the top 10 are ${TYPE_LABELS[lead]}; your page is ${ours === "article" ? "an article" : "a service or product page"}. Google wants ${lead === "article" ? "a guide that answers the search" : "a page that sells the service"} here.`, { mix });
     }
+    // e. The title Google showed for our page against the page's <title> (older snapshots: our entry in the top 10).
+    const shown = s.own?.title || (ownUrl && top.find((x) => x.url && urlKey(x.url) === urlKey(ownUrl))?.title) || null;
+    const rewrite = page?.title ? titleRewrite(shown, page.title, brand) : null;
+    if (rewrite)
+      add("title_rewritten", "Google rewrote the title", `Google showed "${rewrite.shown}"; the page's <title> is "${rewrite.pageTitle}" (${Math.round(rewrite.similarity * 100)}% of words shared). `
+        + "Title links usually come from the <title>, but Google can use the page's headings or links to it instead (Gary Illyes, \"Anatomy of a Search Result\", 2024). Make the <title> a short, accurate description of this page that agrees with its main heading.", rewrite);
     prompts.push({ prompt: r.prompt, position: pos, url: ownUrl, features: Object.keys(types).filter((t) => t !== "organic"), paid: types.paid || 0,
-      snippet: s.snippet, paa: s.paa || [], unanswered, video: videoShown ? hasVideo : undefined, mix, mismatch });
+      snippet: s.snippet, paa: s.paa || [], unanswered, video: videoShown ? hasVideo : undefined, mix, mismatch, shownTitle: shown, titleRewritten: Boolean(rewrite) });
   }
   const features = [...counts].sort((a, b) => b[1] - a[1]).map(([type, n]) => ({ type, label: FEATURE_LABELS[type] || type.replace(/_/g, " "), prompts: n }));
   return { prompts, opportunities, features };
@@ -133,8 +175,10 @@ export function serpFeatures(projectId, opts = {}) {
   const audit = get("SELECT id FROM audits WHERE project_id=? AND status='done' ORDER BY id DESC LIMIT 1", project.id);
   const pages = audit ? all("SELECT url, final_url, status, indexable, title, h1, data FROM pages WHERE audit_id=? AND content_type LIKE '%html%'", audit.id)
     .map((p) => { let data = {}; try { data = JSON.parse(p.data || "{}"); } catch { /* old row */ } return { ...p, data }; }) : [];
-  const directories = String(projectSettings(project).serpDirectories || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
-  const out = serpOpportunities(rows, pages, project.start_url, { directories, ...opts });
+  const settings = projectSettings(project);
+  const directories = String(settings.serpDirectories || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  let host = ""; try { host = new URL(project.start_url).hostname.replace(/^www\./, ""); } catch { /* bad URL */ }
+  const out = serpOpportunities(rows, pages, project.start_url, { directories, brand: [...brandTerms(project, settings), host], ...opts });
   return { run: r, googleRows: rows.length, withData: rows.filter((x) => x.serp?.types).length, auditId: audit?.id || null, ...out };
 }
 
