@@ -13,7 +13,9 @@ export function pageSignals($, { url, $c, text }) {
   const d = { ...spamFindings($, url), ...imageFindings($, url, $c), ...videoFindings($, $c) };
   const list = stuffedList($);
   if (list) d.stuffList = list;
-  const phrases = repeatedPhrases(text);
+  // Repeated phrases count in prose only: link text ("Read more" on every blog card), buttons and menus are navigation.
+  const prose = $c && $c.length ? $c.clone().find("a, button, nav").remove().end().text().replace(/\s+/g, " ").trim() : text;
+  const phrases = repeatedPhrases(prose);
   if (phrases.length) d.stuffPhrases = phrases;
   return d;
 }

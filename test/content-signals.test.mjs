@@ -175,3 +175,18 @@ test("signalSiteIssues runs every site rule on the crawled pages", () => {
   const out = signalSiteIssues({ auditId: 999999, projectId: 999999, pages: [a, b], start: S + "/", cluster: (u) => u, origin: S });
   assert.deepEqual(ids(out), ["dup_h1", "dup_h1"]);
 });
+
+test("repeated phrases ignore link text: 'Read more' on every blog card is navigation, not stuffing", async () => {
+  const cheerio = await import("cheerio");
+  const { pageSignals } = await import("../src/page-signals.mjs");
+  const cards = Array.from({ length: 14 }, (_, i) => `<article><h2>Post ${i}</h2><p>Short summary number ${i} about brakes.</p><a href="/blog/p${i}">Read more</a></article>`).join("");
+  const $ = cheerio.load(`<html><body><main>${cards}</main></body></html>`);
+  const $c = $("main");
+  const d = pageSignals($, { url: "https://example.com/blog/", $c, text: $c.text().replace(/\s+/g, " ").trim() });
+  assert.ok(!(d.stuffPhrases || []).some((p) => p.phrase === "read more"), JSON.stringify(d.stuffPhrases));
+  // The same phrase repeated in prose is still counted.
+  const prose = Array.from({ length: 12 }, () => "<p>Best widget repair here today, with careful checks and clear advice for every owner.</p>").join("");
+  const $2 = cheerio.load(`<html><body><main>${prose}</main></body></html>`);
+  const d2 = pageSignals($2, { url: "https://example.com/w", $c: $2("main"), text: $2("main").text() });
+  assert.ok((d2.stuffPhrases || []).length > 0);
+});
