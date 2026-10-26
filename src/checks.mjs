@@ -23,13 +23,7 @@ export const CHECKS = {
 
   // ---------------- Warnings ----------------
   missing_description: ["warning", "Missing meta description", "Search engines write their own snippet, often a poor one.", "Add a 120–160 character description that sells the click."],
-  title_too_long: ["warning", "Title too long (over 65 characters)", "The end of the title is cut off in results.", "Shorten it and put the main keyword first."],
-  title_too_short: ["warning", "Title too short (under 20 characters)", "A short title misses useful keywords and context.", "Expand it to describe the page."],
-  desc_length: ["warning", "Meta description too short or too long", "Very short snippets say little; long ones get truncated.", "Aim for about 120–160 characters."],
   missing_h1: ["warning", "Missing H1 heading", "The H1 tells users and crawlers the page topic.", "Add one descriptive H1."],
-  multiple_h1: ["warning", "Multiple H1 headings", "Several H1s blur the main topic.", "Use one H1 and H2/H3 for sections."],
-  low_word_count: ["warning", "Low word count (under 200 words)", "Thin pages rarely rank or get cited.", "Add useful, original content or merge the page."],
-  low_text_ratio: ["notice", "Low text-to-HTML ratio (under 10%)", "Mostly code and little visible text can mean thin or bloated pages.", "Add content or remove unnecessary markup."],
   img_missing_alt: ["warning", "Images without alt text", "Alt text helps accessibility and image search.", "Describe each meaningful image in its alt attribute."],
   temporary_redirect: ["warning", "Temporary redirects (302/307)", "Google keeps showing the old URL and doesn't take the target as canonical (no PageRank is lost: it's a canonical signal).", "For a permanent move use 301/308; keep 302/307 only for genuinely temporary detours."],
   sitemap_not_in_robots: ["notice", "Sitemap not declared in robots.txt", "Declaring it helps every search and AI crawler find the sitemap.", "Add a line: Sitemap: https://your-site/sitemap.xml"],
@@ -52,11 +46,9 @@ export const CHECKS = {
   nofollow_internal: ["notice", "Nofollow on internal links", "You're telling crawlers not to follow your own pages.", "Remove rel=nofollow from internal links."],
   missing_canonical: ["notice", "No canonical tag", "A self-referencing canonical guards against duplicate URLs (parameters, tracking tags).", "Add <link rel=\"canonical\"> pointing to the page itself."],
   canonical_elsewhere: ["notice", "Canonical points to another page", "This page asks not to be indexed in its own right. Fine if intended.", "Check that the canonical target is the right version."],
-  url_too_long: ["notice", "URL too long (over 115 characters)", "Long URLs are harder to share and may be truncated.", "Use shorter, readable URLs."],
   not_in_sitemap: ["notice", "Indexable pages missing from the sitemap", "Sitemaps help discovery of every page you want indexed.", "Add them to the XML sitemap."],
   missing_og: ["notice", "Missing Open Graph tags", "Shared links show a poor preview on social media and chat apps.", "Add og:title, og:description and og:image."],
   missing_jsonld: ["notice", "No structured data", "Structured data helps Google understand the page and is required for rich results (only some types still earn one: see Google's search gallery). It is not a ranking factor on its own.", "Add JSON-LD in the server HTML for what the page really is: Organization or LocalBusiness on the home page, Article/BlogPosting, Product, BreadcrumbList, VideoObject. FAQ and HowTo no longer earn rich results (FAQ stopped 7 May 2026, HowTo 2023)."],
-  dup_title_h1: ["notice", "Title and H1 are identical", "A missed chance to target a second phrasing.", "Vary the H1 and title slightly."],
   many_links: ["notice", "Too many on-page links (over 300)", "Link equity is spread thin and the page is hard to use.", "Trim navigation and repeated links."],
   external_nofollow_all: ["notice", "All external links are nofollow", "Normal editorial links don't need nofollow.", "Use nofollow only for paid/untrusted links (sponsored/ugc)."],
   no_robots_txt: ["notice", "robots.txt not found", "Crawlers expect /robots.txt; it is also where you point to your sitemap.", "Add a robots.txt with a Sitemap: line."],
@@ -69,6 +61,18 @@ export const CHECKS = {
   no_conversion_path: ["notice", "No way to act on the page", "Visitors who are ready can't take the next step here: no phone or email link, form or call-to-action button.", "Add the action that fits the page: a phone link, a short form, or a button to book, buy, sign up or get a quote."],
   article_no_money_link: ["notice", "Article doesn't link to a money page", "Articles earn most of a site's links and readers; with no link from the text to a service, product or pricing page, neither reaches the pages that convert.", "Add a link in the text to the page that solves the reader's problem (service, product, feature or pricing), with a descriptive anchor."],
   sitemap_lastmod_uniform: ["notice", "Most sitemap URLs share one lastmod date", "Google and Bing use lastmod only when it is consistently accurate; a bulk date looks like a site-wide reset.", "Set each URL's lastmod to the date its content last really changed."],
+
+  // ---------------- Information: not Google ranking issues (REQ-044, Oct 2026) ----------------
+  // Kept visible so nothing is hidden, as notices: they don't count toward Site Health. The numbers are this tool's
+  // conventions, not Google limits.
+  title_too_long: ["notice", "Title over 65 characters (information: not a Google ranking issue)", "Google sets no length limit for the <title> and doesn't rank shorter titles higher. It truncates title links to fit the device width, so the end of a long title may be cut off in results (title links doc). 65 characters is this tool's rough estimate of where a cut can start.", "Nothing to fix for ranking. If the words that matter most come late, move them to the front so they survive a cut."],
+  title_too_short: ["notice", "Title under 20 characters (information: not a Google ranking issue)", "Google sets no minimum title length. A very short title may not describe the page, and Google can then show a title link built from the page's headings or other text instead (title links doc).", "If the title doesn't say what the page is, make it descriptive and concise. A short, accurate title is fine."],
+  desc_length: ["notice", "Meta description short or long (information: not a Google ranking issue)", "The meta description isn't a Google ranking factor and has no length limit; Google truncates snippets to fit the device width and often writes its own snippet from the page text to match the search (snippets doc). The 70–170 character range is this tool's convention.", "Nothing to fix for ranking. If you want a say in the snippet, write a description that accurately summarises the page."],
+  multiple_h1: ["notice", "Several H1 headings (information: not a Google issue)", "Google says several H1 elements on a page are fine: it uses headings to understand the page and doesn't count H1s (John Mueller, 2017 and 2019). A clear heading outline still helps readers and screen readers.", "Nothing to fix for Google. Keep headings meaningful and in a sensible order."],
+  low_word_count: ["notice", "Under 200 words (information: not a Google ranking issue)", "Google has no minimum word count and says word count isn't a ranking factor (John Mueller); short pages such as contact or booking pages can do their job well. Pages that add nothing useful still struggle, whatever their length.", "Check the page gives visitors what they came for. Add detail only where it helps them; don't pad."],
+  low_text_ratio: ["notice", "Low text-to-HTML ratio, under 10% (information: not a Google metric)", "Google doesn't use a text-to-HTML ratio. Very heavy markup can slow a page, and little visible text can mean a thin page, so it's a hint to look, nothing more.", "Only if the page is slow or thin: remove unneeded markup or add useful content."],
+  url_too_long: ["notice", "URL over 115 characters (information: not a Google ranking issue)", "Google doesn't rank by URL length. Google recommends simple, readable URLs; long ones are harder to read and share.", "Nothing to fix for ranking. For new pages, prefer short, readable URLs; don't change working URLs just for length."],
+  dup_title_h1: ["notice", "Title and H1 identical (information: not a Google issue)", "Google doesn't penalise a title that matches the H1; both describing the page the same way is normal. Varying them is optional.", "Nothing to fix. Optionally use the H1 or the title for a second phrasing readers use."],
 
   // ---------------- Content age, structure and video ----------------
   content_stale: ["notice", "Article not updated in over 12 months", "The newest date this article states is more than a year before the audit. Facts, prices, laws and screenshots go out of date, and readers and AI answers prefer current information. Age alone is not a ranking penalty.", "Review the article: correct what changed, add what's new, then update the visible date and dateModified. Don't change the date without changing the content."],
@@ -102,6 +106,18 @@ export const CHECKS = {
   robots_disallow_added: ["warning", "New robots.txt rule blocks pages that were indexable", "A Disallow rule added since the last audit stops Googlebot fetching pages that were indexable then, or the whole site. Google can't recrawl blocked pages: their URLs can still show in results but without a description, and updates to them aren't seen (robots.txt introduction).", "If the block wasn't intended, remove or narrow the rule. To keep a page out of Google, leave it crawlable and use noindex instead of Disallow."],
   favicon_issue: ["notice", "Home page favicon problem", "Google shows a site's favicon next to its results only when the home page declares one with <link rel=\"icon\"> (or shortcut icon / apple-touch-icon), Googlebot-Image may crawl the file, and the image is square, at least 8x8 px (over 48x48 recommended), in BMP, GIF, ICO, PNG, JPEG, PPM or TIFF (favicon guidelines). One favicon per host name.", "Add <link rel=\"icon\" href=\"/favicon.ico\"> (or a PNG) to the home page's <head>, serve it with HTTP 200, allow it in robots.txt, and use a square image of 48x48 px or larger (e.g. 96x96 or 192x192). Keep its URL stable."],
   back_button_hijack: ["warning", "Possible back-button hijacking script", "Since 13 April 2026 Google's spam policies (malicious practices) name back-button hijacking: scripts that insert or replace history entries so the back button doesn't return to the previous page. Enforcement began 15 June 2026 with manual actions or automated demotions. Google notes it often comes from an included library or ad platform.", "Open the script named in the detail and remove or disable code that calls history.pushState in a popstate handler, pushes entries in a loop, or redirects when the visitor presses back; for a third-party tag, remove it or ask the vendor. This is a heuristic: confirm by pressing back in a browser."],
+  // ---------------- Index signals (REQ-044: Google Search Central docs and videos, Oct 2026) ----------------
+  unavailable_after_passed: ["warning", "unavailable_after date has passed", "The page's robots meta tag or X-Robots-Tag says unavailable_after a date before the audit, so Google no longer shows the page in results (robots meta tag doc). Often a leftover from a promotion or event.", "Remove the unavailable_after rule, or set a future date, if the page should stay in Google."],
+  unavailable_after_invalid: ["notice", "unavailable_after date can't be read", "Google ignores unavailable_after unless the date is in a widely used format such as RFC 822, RFC 850 or ISO 8601 (robots meta tag doc), so this rule has no effect.", "Write the date in ISO 8601 (e.g. 2027-06-25T15:00:00Z) or remove the rule."],
+  robots_other_bot: ["notice", "Robots rules for other crawlers only (information)", "This page has robots rules scoped to a crawler other than Googlebot (e.g. bingbot: noindex). Google ignores rules for other user agents, so they don't affect Google; they do affect that crawler.", "Check each rule is meant for that crawler. To apply one to Google too, use name=\"robots\" (or googlebot) or an unscoped X-Robots-Tag."],
+  canonical_conflict: ["warning", "Canonical signals conflict", "Google treats rel=canonical as a strong hint, weighed with other signals. A canonical that is empty, an unfilled template value or contains a #fragment can't be used; one that points to a noindex page, to a URL that canonicalises on elsewhere (a chain or loop), to the home page from pages with their own content, or that differs from the HTTP Link header canonical sends mixed signals, and Google may choose another URL (canonicalization docs; Allan Scott, 2024; John Mueller, Google Search News Nov 2024).", "Point each page's canonical at the final, indexable URL of the version you want shown, as a full absolute URL in the server's HTML; keep the Link header and the HTML tag the same."],
+  canonical_form: ["notice", "Canonical is relative or points to another host", "Google supports relative canonical URLs but recommends absolute ones, which avoid mistakes on staging copies and alternative hosts (canonicalization docs). A canonical to another host is a cross-domain canonical: fine for syndicated copies, a mistake when the host is a staging site or the wrong www/non-www version.", "Write the canonical as the full absolute URL on the host you want indexed, e.g. https://example.com/page.html."],
+  soft_404_content: ["warning", "Page looks like an error page but answers 200 (soft 404)", "The title or H1 says not found / no results and the page has little text, or its text is identical to the site's own 404 page, yet it returns HTTP 200. Google treats such pages as soft 404s and leaves them out of the index; meanwhile they use up crawling (soft 404 docs; Martin Splitt, 2022). The wording rule is a heuristic.", "Return HTTP 404 or 410 for pages that don't exist; if the page should be indexed, give it real content (e.g. related items on an empty listing)."],
+  redirect_to_home: ["warning", "URL redirects to the home page", "A deep URL that redirects to the home page has no real replacement there, so Google may treat the redirect as a soft 404 instead of passing the old URL on (Google redirects and soft 404 guidance).", "Redirect the URL to the closest matching page, or return 404/410 when nothing replaces it; update links and the sitemap."],
+  robots_blocked_noindex: ["warning", "noindex on a page robots.txt blocks", "Google can't fetch a URL that robots.txt disallows, so it never sees the noindex on it; the URL can still be indexed from links, without its content (robots.txt introduction; Gary Illyes, 2022).", "To keep the page out of Google, remove the robots.txt rule so Googlebot can read the noindex. Use robots.txt only for what Google shouldn't fetch."],
+  robots_blocked_linked: ["notice", "Many internal links to a robots.txt-blocked URL", "Google can index a robots.txt-blocked URL from links without its content and show it with no description (robots.txt introduction). Fine when the URL only needs to stay uncrawled (cart, login).", "If the URL must stay out of Google, allow crawling and add noindex instead; if it should rank, allow crawling. Otherwise no change is needed."],
+  sitemap_fetch_error: ["warning", "Sitemap can't be read", "A sitemap named in robots.txt or in a sitemap index returns an error, isn't a sitemap (e.g. an HTML page) or isn't well-formed XML, so Google can't use the URLs in it (Search Console sitemaps report; Daniel Waisberg and John Mueller, 2020).", "Make each listed sitemap return HTTP 200 with valid sitemap XML (escape & as &amp;), a gzip of it, an RSS/Atom feed or a plain list of URLs; remove dead entries from robots.txt and the sitemap index."],
+  sitemap_too_large: ["error", "Sitemap over Google's limits, or a nested sitemap index", "Google reads at most 50,000 URLs and 50 MB (uncompressed) per sitemap file, and a sitemap index can't list other sitemap indexes (Google sitemaps docs). A file over the limits can be rejected whole.", "Split large sitemaps into files under 50,000 URLs and 50 MB and list them in one sitemap index; list only sitemaps, not indexes, in an index."],
   raw_vs_rendered: ["warning", "Raw HTML and rendered page disagree (canonical, robots or main text)", "Google reads the raw HTML first and renders JavaScript later. With noindex in the raw HTML Google may skip rendering, so JavaScript can't remove it; a canonical that JavaScript changes or removes conflicts with the original HTML (JavaScript SEO basics). Text that appears only after rendering is missed by crawlers that don't run JavaScript. Checked only when JavaScript rendering is on.", "Put the final canonical and robots meta in the server's HTML and don't change them with JavaScript; never ship noindex in the raw HTML of a page that should be indexed. Server-render or pre-render the main content."],
 };
 
@@ -110,7 +126,8 @@ export const CRAWL = new Set(["http_4xx", "http_5xx", "broken_internal_link", "r
   "blocked_by_robots", "no_robots_txt", "no_sitemap", "sitemap_not_in_robots", "sitemap_bad_url", "noindex_in_sitemap", "sitemap_orphan", "not_in_sitemap", "deep_page",
   "single_inlink", "nofollow_internal", "url_too_long", "robots_txt_error", "robots_disallow_all", "robots_txt_large", "robots_blocks_resources", "soft_404",
   "host_variant_tls", "host_variant_missing", "host_variant_redirect", "uncrawlable_links", "meta_refresh", "nofollow_page", "sitemap_blocked", "links_to_redirect", "param_trap",
-  "head_closed_early", "robots_txt_changed", "robots_disallow_added", "raw_vs_rendered"]);
+  "head_closed_early", "robots_txt_changed", "robots_disallow_added", "raw_vs_rendered", "unavailable_after_passed", "canonical_conflict", "soft_404_content", "redirect_to_home",
+  "robots_blocked_noindex", "robots_blocked_linked", "sitemap_fetch_error", "sitemap_too_large"]);
 
 export const SEVERITY = (id) => CHECKS[id][0];
 
@@ -154,6 +171,12 @@ export function pageIssues(p, ctx) {
   else if (p.response_ms > 1500) add("slow_page", `${p.response_ms} ms`);
   if (d.blockedByRobots) add("blocked_by_robots");
   if (p.url.length > 115) add("url_too_long", `${p.url.length} chars`);
+  if (p.status === 200 && d.unavailableAfter) { // header or meta, any content type (PDFs use the header)
+    const ua = d.unavailableAfter, today = ctx.auditDate || new Date().toISOString().slice(0, 10);
+    if (!ua.at) add("unavailable_after_invalid", `"${ua.raw}"`);
+    else if (ua.at.slice(0, 10) < today) add("unavailable_after_passed", `unavailable_after ${ua.raw} (before the audit date ${today})`);
+  }
+  if (p.status === 200 && d.robotsOtherBots?.length) add("robots_other_bot", d.robotsOtherBots.join("; "));
   // A ?query variant whose canonical is its own clean URL is set up correctly; its content is checked on that URL.
   if (d.variantOf) return out;
   if (p.status !== 200 || !isHtml) return out;
@@ -176,6 +199,9 @@ export function pageIssues(p, ctx) {
   if (d.canonicals > 1) add("canonical_multiple", `${d.canonicals} tags`);
   if (!d.canonicals && p.indexable) add("missing_canonical");
   if (p.canonical && p.canonical !== p.url && p.canonical !== p.final_url) add("canonical_elsewhere", p.canonical);
+  if (d.canonicalProblem) add("canonical_conflict", d.canonicalProblem);
+  else if (d.canonicalHeader && p.canonical && d.canonicalHeader !== p.canonical) add("canonical_conflict", `HTTP Link header canonical ${d.canonicalHeader}, HTML canonical ${p.canonical}`);
+  if (d.canonicalForm) add("canonical_form", d.canonicalForm);
   if (d.jsonldInvalid) add("invalid_jsonld", `${d.jsonldInvalid} block(s)`);
   if (d.faqHidden) add("schema_faq_hidden", d.faqHidden);
   if (d.crumbHidden) add("schema_breadcrumb_hidden");
@@ -188,7 +214,7 @@ export function pageIssues(p, ctx) {
   if (d.nofollowInternal) add("nofollow_internal", `${d.nofollowInternal} link(s)`);
   if (d.jsLinks) add("uncrawlable_links", `${d.jsLinks} link(s)${d.jsLinkExample ? `, e.g. ${d.jsLinkExample}` : ""}`);
   if (d.metaRefresh) add("meta_refresh", d.metaRefresh);
-  if (d.nofollowMeta) add("nofollow_page");
+  if (d.nofollowMeta) add("nofollow_page", d.nofollowMeta === "X-Robots-Tag" ? "via X-Robots-Tag header" : "");
   if (d.headClosedEarly) { const h = d.headClosedEarly; add("head_closed_early", `${h.element} on line ${h.line} closes the head; after it: ${h.tags.join(", ")}${h.robots ? ", robots meta (Google still honours that one)" : ""}`); }
   if (d.rawVsRendered) add("raw_vs_rendered", d.rawVsRendered);
   if (d.backButton) add("back_button_hijack", `possible, in ${d.backButton}`);

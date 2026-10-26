@@ -7,7 +7,10 @@ import { CHECKS } from "./checks.mjs";
 export const AI_CHECKS = {
   ai_bot_blocked_server: ["error", "Server treats a search/AI crawler differently from a browser", "robots.txt allows the bot, but the host or firewall answers it with a different status or a much smaller page, so that product can't read the site.", "Check the firewall/CDN/security plugin rules for that user agent; allow the documented crawler."],
   ai_snippet_blocked: ["warning", "Page limits snippets (nosnippet / noarchive / nocache / max-snippet:0)", "Bing documents that these limit how Copilot and Bing answers can use and cite the page; nosnippet also removes Google snippets.", "Remove the directive unless you really want the page kept out of answers."],
-  ai_bot_blocked: ["error", "AI search crawler blocked in robots.txt", "Blocked crawlers can't read the site, so it can't be cited in that AI product.", "Allow the bot in robots.txt (block training-only bots separately if you want)."],
+  ai_search_bot_blocked: ["error", "AI search crawler blocked in robots.txt", "This crawler fetches pages for an AI search or answer product (ChatGPT search, Claude, Perplexity, Bing/Copilot). Blocked at the site root, it can't read the site, so the site can't be shown or cited there.", "Allow the bot in robots.txt. To opt out of AI training only, block the training tokens (GPTBot, ClaudeBot, CCBot, Google-Extended…) instead."],
+  ai_training_optout: ["notice", "AI training opt-out in robots.txt (information)", "This token controls AI model training or grounding, not search: Google-Extended and Applebot-Extended aren't separate crawlers, and Google says blocking Google-Extended doesn't affect Google Search, including AI Overviews. GPTBot, ClaudeBot and CCBot collect training data. A valid choice: it doesn't count against AI Readiness.", "Nothing to fix. Keep the block if you don't want your content used for training; remove it if you do."],
+  // Older audits stored every robots.txt block under one id; kept so their issue lists still show a title.
+  ai_bot_blocked: ["error", "AI crawler blocked in robots.txt (older audits)", "Older audits didn't separate AI search crawlers from AI training opt-outs; newer audits report them as ai_search_bot_blocked and ai_training_optout.", "Run a new audit to see which kind each block is."],
   ai_js_dependent: ["error", "Main content needs JavaScript", "Most AI crawlers don't run JavaScript, so they see an almost empty page.", "Render the main content on the server (static HTML / SSR)."],
   ai_no_answer: ["warning", "No direct answer near the top", "AI answers favour pages that answer the question in the first part of the page.", "Open with a paragraph (40–180 words) whose first sentences answer the page's main question."],
   ai_no_author: ["warning", "No author or reviewer signal", "Named, accountable authors are a trust signal for AI and Google.", "Show an author/reviewer with role, and add author to Article/BlogPosting schema."],
@@ -19,8 +22,15 @@ export const AI_CHECKS = {
 };
 Object.assign(CHECKS, AI_CHECKS);
 
-// Crawlers that fetch pages for AI *search/answers* (not only training).
-export const AI_BOTS = ["GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-SearchBot", "PerplexityBot", "Google-Extended", "Bingbot", "Applebot-Extended"];
+// robots.txt user-agent tokens, as of October 2026 (vendors rename and add tokens: re-check their docs yearly).
+// Search/answer fetchers: blocking them keeps the site out of that product's answers.
+export const AI_SEARCH_BOTS = ["OAI-SearchBot", "ChatGPT-User", "Claude-SearchBot", "Claude-User", "PerplexityBot", "Perplexity-User", "Bingbot"];
+// Training and grounding control tokens: blocking them is an opt-out, with no effect on search visibility.
+export const AI_TRAINING_BOTS = ["GPTBot", "ClaudeBot", "anthropic-ai", "CCBot", "Google-Extended", "Applebot-Extended", "Meta-ExternalAgent"];
+// Google's crawler for research and one-off fetches (not Search); reported for information only.
+export const OTHER_BOTS = ["GoogleOther"];
+export const AI_BOTS = [...AI_SEARCH_BOTS, ...AI_TRAINING_BOTS, ...OTHER_BOTS];
+const kindOf = (b) => (AI_SEARCH_BOTS.includes(b) ? "search" : AI_TRAINING_BOTS.includes(b) ? "training" : "other");
 
 export function aiPageIssues(p) {
   const d = p.data || {};
@@ -47,19 +57,24 @@ export function aiPageIssues(p) {
   return out;
 }
 
+/** Search/answer fetchers blocked at the site root → ai_search_bot_blocked (error); training tokens blocked →
+ *  ai_training_optout (notice). GoogleOther is only listed in aiBotAccess. */
 export function aiSiteIssues(robotsTxt, origin) {
   if (!robotsTxt) return [];
   const r = robotsParser(origin + "/robots.txt", robotsTxt);
-  return AI_BOTS.filter((b) => r.isAllowed(origin + "/", b) === false).map((b) => ["ai_bot_blocked", b]);
+  const blocked = (b) => r.isAllowed(origin + "/", b) === false;
+  return [...AI_SEARCH_BOTS.filter(blocked).map((b) => ["ai_search_bot_blocked", b]),
+    ...AI_TRAINING_BOTS.filter(blocked).map((b) => ["ai_training_optout", `${b}: ${/^Google-/.test(b) ? "doesn't affect Google Search or AI Overviews" : "training opt-out; search crawlers are separate tokens"}`])];
 }
 
 export function aiBotAccess(robotsTxt, origin) {
   const r = robotsParser(origin + "/robots.txt", robotsTxt || "");
-  return AI_BOTS.map((b) => ({ bot: b, allowed: robotsTxt ? r.isAllowed(origin + "/", b) !== false : true }));
+  return AI_BOTS.map((b) => ({ bot: b, kind: kindOf(b), allowed: robotsTxt ? r.isAllowed(origin + "/", b) !== false : true }));
 }
 
 const WEIGHT = { error: 10, warning: 4, notice: 1 };
-/** AI Readiness 0–100: each indexable page starts at 100 and loses points per AI issue; site-level blocks cost 15 each. */
+/** AI Readiness 0–100: each indexable page starts at 100 and loses points per AI issue; each blocked AI search
+ *  crawler (siteBlocks) costs 15. Training opt-outs are not passed in and cost nothing. */
 export function aiReadiness(pageIssueRows, indexablePages, siteBlocks) {
   if (!indexablePages) return 0;
   const perPage = new Map();

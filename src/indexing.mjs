@@ -13,10 +13,16 @@ CREATE TABLE IF NOT EXISTS index_runs (id INTEGER PRIMARY KEY, project_id INTEGE
   started_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT, urls INTEGER, status TEXT, message TEXT);
 `);
 
+// Each run's counts per kind (wanted pages), so a kind that grows between runs can be flagged.
+if (!db.prepare("PRAGMA table_info(index_runs)").all().some((c) => c.name === "counts")) db.exec("ALTER TABLE index_runs ADD COLUMN counts TEXT");
+
 export const MAX_PER_RUN = 500;
 
-// Google's coverage states (Search Console wording) → kind + what to do. Order matters: "Soft 404" before "404".
+// Google's coverage states (Search Console wording) → kind + what to do. Order matters: "Soft 404" before "404", and
+// the two "Indexed, though…" problems before the plain Indexed rule.
 const RULES = [
+  [/though blocked by robots/i, "indexed_blocked", "Indexed from links although robots.txt blocks it, so Google shows it without its content. To keep it out of Google, allow crawling and add noindex; to keep it in, remove the robots.txt rule."],
+  [/without content/i, "indexed_no_content", "Indexed, but Google couldn't read content on it (often cloaking, or a format Google can't index). Check the page with URL Inspection's live test."],
   [/^Submitted and indexed|^Indexed/i, "indexed", "Indexed."],
   [/unknown to Google/i, "unknown", "Google hasn't found this page yet. Keep it in the sitemap, link to it from another page's text, then use Request indexing in Search Console."],
   [/Discovered - currently not indexed/i, "discovered", "Google knows the URL but hasn't crawled it yet. Link to it from strong pages' text; Request indexing for the important ones. New pages often wait a few weeks."],
@@ -90,24 +96,58 @@ export async function startIndexRun(project, { inspect } = {}) {
     await Promise.all([worker(), worker(), worker()]);
     // Pages no longer in the audit drop out of the list once a full run has replaced them.
     if (!quota) run("DELETE FROM index_status WHERE project_id=? AND inspected_at < ?", project.id, started);
-    run("UPDATE index_runs SET status=?, finished_at=datetime('now'), message=? WHERE id=?", quota ? "stopped" : "done", quota, runId);
+    const counts = countKinds(all("SELECT coverage, verdict FROM index_status WHERE project_id=? AND wanted=1 AND error IS NULL", project.id).map((r) => classify(r.coverage, r.verdict)));
+    run("UPDATE index_runs SET status=?, finished_at=datetime('now'), message=?, counts=? WHERE id=?", quota ? "stopped" : "done", quota, JSON.stringify(counts), runId);
     running.delete(project.id);
     emit({ type: "phase", projectId: project.id, auditId: null, phase: null });
   })().catch((e) => { running.delete(project.id); run("UPDATE index_runs SET status='failed', message=? WHERE id=?", e.message, runId); });
   return { runId, urls: urls.length, done: job };
 }
 
+const INDEXED_PROBLEM = new Set(["indexed_blocked", "indexed_no_content"]); // in Google, but not properly
+const isIndexed = (k) => k === "indexed" || INDEXED_PROBLEM.has(k);
+
+/** Section of a URL for grouping: its first folder, or the first two when the first is a language folder (/en/,
+ *  /de-at/); pages at the root are "/". */
+export function folderOf(url) {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    if (parts.length < 2) return "/";
+    const lang = /^[a-z]{2}(?:[-_][a-z]{2,4})?$/i.test(parts[0]);
+    return lang && parts.length > 2 ? `/${parts[0]}/${parts[1]}/` : `/${parts[0]}/`;
+  } catch { return "/"; }
+}
+
+/** Not-indexed share per section for wanted pages; a section needs at least `min` inspected pages to be shown. */
+export function folderShares(rows, min = 10) {
+  const by = new Map();
+  for (const r of rows) { const f = folderOf(r.url), x = by.get(f) || { folder: f, inspected: 0, notIndexed: 0 }; x.inspected++; if (!isIndexed(r.kind)) x.notIndexed++; by.set(f, x); }
+  return [...by.values()].filter((x) => x.inspected >= min).map((x) => ({ ...x, share: +(x.notIndexed / x.inspected).toFixed(2) }))
+    .sort((a, b) => b.share - a.share || b.inspected - a.inspected);
+}
+
+/** Kinds that grew by at least 20% and 10 URLs from the previous run's counts to the latest (problem kinds only). */
+export function kindRises(prev, cur) {
+  if (!prev || !cur) return [];
+  return Object.entries(cur).filter(([k, n]) => k !== "indexed" && n - (prev[k] || 0) >= 10 && n >= (prev[k] || 0) * 1.2)
+    .map(([kind, n]) => ({ kind, from: prev[kind] || 0, to: n }));
+}
+
+const countKinds = (want) => want.reduce((m, r) => ({ ...m, [r.kind]: (m[r.kind] || 0) + 1 }), {});
+
 export function indexData(projectId) {
   const rows = all("SELECT * FROM index_status WHERE project_id=? ORDER BY url", projectId).map((r) => ({ ...r, ...classify(r.coverage, r.verdict) }));
   const ok = rows.filter((r) => !r.error), want = ok.filter((r) => r.wanted), rest = ok.filter((r) => !r.wanted);
-  const groups = {};
-  for (const r of want) groups[r.kind] = (groups[r.kind] || 0) + 1;
+  const groups = countKinds(want);
+  const runs = all("SELECT counts FROM index_runs WHERE project_id=? AND counts IS NOT NULL ORDER BY id DESC LIMIT 2", projectId).map((r) => JSON.parse(r.counts));
+  const indexedProblems = want.filter((r) => INDEXED_PROBLEM.has(r.kind)).length;
   return { running: running.has(projectId), lastRun: get("SELECT * FROM index_runs WHERE project_id=? ORDER BY id DESC LIMIT 1", projectId) || null,
-    pending: targets(projectId).length, total: want.length, indexed: groups.indexed || 0, notIndexed: want.length - (groups.indexed || 0),
-    expected: rest.filter((r) => r.kind !== "indexed").length,
+    pending: targets(projectId).length, total: want.length, indexed: groups.indexed || 0, indexedProblems,
+    notIndexed: want.length - (groups.indexed || 0) - indexedProblems,
+    expected: rest.filter((r) => !isIndexed(r.kind)).length,
     // A URL the site keeps out of Google (canonical elsewhere, noindex, redirect) that Google indexed anyway: a duplicate risk.
-    strayIndexed: rest.filter((r) => r.kind === "indexed").length,
-    errors: rows.filter((r) => r.error).length, groups, rows };
+    strayIndexed: rest.filter((r) => isIndexed(r.kind)).length,
+    errors: rows.filter((r) => r.error).length, groups, folders: folderShares(want), rises: kindRises(runs[1], runs[0]), rows };
 }
 
 export function register({ routes }) {

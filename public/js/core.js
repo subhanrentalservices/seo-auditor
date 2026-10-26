@@ -60,7 +60,7 @@ export function band(score) {
 }
 
 /** Ring meter for a 0–100 score with label and status word. */
-export function meter(score, label, sub) {
+export function meter(score, label, sub, note) {
   const r = 34, c = 2 * Math.PI * r, b = band(score);
   const frac = Math.max(0, Math.min(1, (score ?? 0) / 100));
   return h("div", { class: "meter" },
@@ -69,7 +69,8 @@ export function meter(score, label, sub) {
       h("circle", { cx: 42, cy: 42, r, fill: "none", stroke: b.color, "stroke-width": 9, "stroke-linecap": "round",
         "stroke-dasharray": `${c * frac} ${c}`, transform: "rotate(-90 42 42)" })),
     h("div", {}, h("div", { class: "lbl" }, label), h("div", { class: "big" }, score ?? "–"),
-      h("div", { class: "small" }, h("span", { style: { color: b.color }, "aria-hidden": "true" }, b.icon + " "), b.word, sub ? h("span", { class: "muted" }, " · ", sub) : null)));
+      h("div", { class: "small" }, h("span", { style: { color: b.color }, "aria-hidden": "true" }, b.icon + " "), b.word, sub ? h("span", { class: "muted" }, " · ", sub) : null),
+      note ? h("div", { class: "small muted" }, note) : null));
 }
 
 /** Single-series line over time with crosshair + tooltip. points: [{x: label, y: value, sub?}] */

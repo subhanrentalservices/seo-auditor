@@ -6,10 +6,12 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { db, run, get, all } from "./db.mjs";
 import { CHECKS, pageIssues, healthScore } from "./checks.mjs";
-import { crawlabilitySiteIssues, paramTraps, headClosedEarly, robotsDiff, faviconIssues, historyTraps, scriptTrapIssues } from "./crawlability.mjs";
+import { crawlabilitySiteIssues, paramTraps, headClosedEarly, robotsDiff, faviconIssues, historyTraps, scriptTrapIssues, robotsBlockedIssues } from "./crawlability.mjs";
 import { aiPageIssues, aiSiteIssues, aiBotAccess, aiReadiness } from "./ai-checks.mjs";
 import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } from "./quality.mjs";
 import { conversionIssues } from "./conversion.mjs";
+import { robotsDirectives, applyHeaderRobots, canonicalHrefProblem, linkHeaderCanonical, textFingerprint, canonicalSiteIssues, soft404Issues } from "./google-signals.mjs";
+import { loadSitemaps } from "./sitemaps.mjs";
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
@@ -107,28 +109,6 @@ async function fetchFollow(url, ua) {
   return { ...r, finalUrl: seen.at(-1), redirect, ms: total };
 }
 
-async function loadSitemaps(origin, robotsTxt, ua) {
-  const declared = [...robotsTxt.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
-  const queue = declared.length ? [...declared] : [origin + "/sitemap.xml"];
-  const urls = new Set(); const seen = new Set(); const lastmods = []; const lastmodOf = new Map();
-  while (queue.length && seen.size < 50) {
-    const sm = queue.shift(); if (seen.has(sm)) continue; seen.add(sm);
-    const r = await fetchFollow(sm, ua);
-    if (r.status !== 200) continue;
-    const locs = [...r.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map((m) => m[1].replace(/&amp;/g, "&"));
-    if (/<sitemapindex/i.test(r.body)) queue.push(...locs);
-    else {
-      locs.forEach((l) => urls.size < 100000 && urls.add(normalize(l)));
-      lastmods.push(...[...r.body.matchAll(/<lastmod>\s*([^<\s]+)\s*<\/lastmod>/g)].map((m) => m[1]));
-      for (const [, block] of r.body.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
-        const loc = block.match(/<loc>\s*([^<\s]+)\s*<\/loc>/), lm = block.match(/<lastmod>\s*([^<\s]+)\s*<\/lastmod>/);
-        if (loc && lm && lastmodOf.size < 100000) lastmodOf.set(normalize(loc[1].replace(/&amp;/g, "&")), lm[1].slice(0, 10));
-      }
-    }
-  }
-  return { urls, lastmods, lastmodOf, found: seen.size > 0 && urls.size > 0, declared: declared.length > 0 };
-}
-
 // Button or link text that asks the visitor to act (any kind of site: book, buy, sign up, get a quote, start a trial...).
 const CTA = /^(?:[^\w]*)(book|call|ring|phone|contact|enquire|inquire|get (?:a |your |started|in touch|quote)|request|claim|apply|buy|order|shop|add to (?:cart|bag|basket)|checkout|sign ?up|register|join|subscribe|start|try|free trial|demo|schedule|download|install|quote)\b/i;
 
@@ -152,13 +132,19 @@ const VIDEO_SRC = /youtube(?:-nocookie)?\.com\/(?:embed|watch)|youtu\.be\/|playe
 export function parseHtml(html, url) {
   const $ = cheerio.load(html);
   const d = {};
-  const robotsMeta = ($('meta[name="robots"]').attr("content") || "") + " " + ($('meta[name="googlebot"]').attr("content") || "");
-  d.noindex = /noindex/i.test(robotsMeta);
-  // nosnippet / noarchive / nocache / max-snippet:0 limit how search and AI answers (Bing Copilot) may quote the page.
-  const snip = robotsMeta.match(/nosnippet|noarchive|nocache|max-snippet\s*:\s*0\b/i);
-  if (snip) d.snippetBlock = snip[0];
+  // Every robots meta tag counts (Google combines them); name="robots" and "googlebot" apply to Googlebot, other bot
+  // names (bingbot…) are listed only. none = noindex + nofollow.
+  const metas = $("meta[name][content]").map((_, e) => ({ name: $(e).attr("name").toLowerCase(), content: $(e).attr("content") })).get()
+    .filter((m) => /^(robots|[\w-]*bot[\w-]*)$/.test(m.name));
+  const robotsMeta = metas.filter((m) => m.name === "robots" || m.name === "googlebot").map((m) => m.content).join(" ");
+  const rd = robotsDirectives(metas);
+  d.noindex = rd.noindex;
+  // nosnippet / noarchive / nocache / max-snippet under 50 limit how search and AI answers (Bing Copilot) may quote the page.
+  if (rd.snippet) d.snippetBlock = rd.snippet;
+  if (rd.unavailableAfter) d.unavailableAfter = rd.unavailableAfter;
+  if (rd.others.length) d.robotsOtherBots = rd.others;
   // Crawlability: page-level nofollow, meta refresh redirects, and navigation done in JavaScript (not an <a href>).
-  if (/\b(nofollow|none)\b/i.test(robotsMeta)) d.nofollowMeta = true;
+  if (rd.nofollow) d.nofollowMeta = true;
   const refresh = $("meta[http-equiv]").filter((_, e) => /^refresh$/i.test($(e).attr("http-equiv"))).attr("content");
   if (refresh && /url\s*=/i.test(refresh)) d.metaRefresh = refresh.slice(0, 120);
   const JSNAV = /(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\(|window\.open\()\s*['"]([^'"]+)/i;
@@ -173,6 +159,10 @@ export function parseHtml(html, url) {
   const canon = $('link[rel="canonical"]');
   d.canonicals = canon.length;
   const canonical = canon.length ? normalize(canon.first().attr("href"), url) : null;
+  if (canon.length) { // checked on the raw href: normalize() drops a #fragment and resolves relative paths
+    const cp = canonicalHrefProblem(canon.first().attr("href"), url);
+    if (cp?.bad) d.canonicalProblem = cp.bad; else if (cp?.form) d.canonicalForm = cp.form;
+  }
   d.h1Count = $("h1").length;
   d.lang = $("html").attr("lang") || "";
   d.viewport = $('meta[name="viewport"]').length > 0;
@@ -404,7 +394,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
     saveRobots(auditId, robotsRes.status, robotsTxt);
     let home = null; // the start page's raw HTML, for the favicon and script checks
-    const sitemap = await loadSitemaps(origin, robotsTxt, ua);
+    const sitemap = await loadSitemaps(origin, robotsTxt, ua, { normalize });
     const llms = await fetchOnce(origin + "/llms.txt", ua, "GET");
     if (settings.renderJs) { const { launchChromium } = await import("./browser.mjs"); browser = await launchChromium(); }
 
@@ -445,8 +435,10 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
           if (raw) { const diff = rawRenderedDiff(raw, p); if (diff) d.rawVsRendered = diff; }
           if (url === start) home = { html: r.body, url: final };
         }
-        const xr = r.headers.get("x-robots-tag") || "";
-        if (/noindex/i.test(xr)) { d.noindex = true; d.noindexSource = "X-Robots-Tag"; } else if (d.noindex) d.noindexSource = "meta robots";
+        applyHeaderRobots(d, r.headers.get("x-robots-tag") || ""); // only googlebot: or unscoped header lines count
+        const linkCanon = linkHeaderCanonical(r.headers.get("link"), final);
+        if (linkCanon) d.canonicalHeader = linkCanon;
+        if (isHtml && p.text) d.textHash = textFingerprint(p.text); // every page, even short ones (soft-404 and canonical checks)
         if (jsWordsRaw !== null) { d.jsWordsRaw = jsWordsRaw; d.jsWordsRendered = p.words; }
         const indexable = r.status === 200 && isHtml && !d.noindex && (!p.canonical || p.canonical === final || p.canonical === url) ? 1 : 0;
         const bytes = Buffer.byteLength(r.body || "");
@@ -545,7 +537,11 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // Research-based site checks (quality.mjs): computed before the write transaction because they fetch.
     const near = similarForAudit(auditId, { min: 0.5 }).filter((x) => cluster(x.a) !== cluster(x.b));
     const access = ctl.stop ? null : await crawlerAccess(start, ua);
-    const crawlSite = ctl.stop ? [] : await crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua }).catch(() => []);
+    const keep = {}; // crawlabilitySiteIssues keeps the 404 probe's response here (soft_404_content compares texts)
+    const crawlSite = ctl.stop ? [] : await crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua, keep }).catch(() => []);
+    const notFoundHash = keep.notFound?.body ? textFingerprint(parseHtml(keep.notFound.body, keep.notFound.url).text) : null;
+    // Robots-blocked URLs the site links to or lists, fetched once each: a noindex there is invisible to Google.
+    const blockedChecks = ctl.stop || !settings.respectRobots || settings.auditBlockedUrls !== true ? [] : await robotsBlockedIssues(pages, { ua }).catch(() => []);
     const robotsChanges = robotsChangeIssues(project.id, auditId, robotsRes.status, robotsTxt, origin);
     const favicon = ctl.stop || !home ? [] : await faviconIssues({ start: home.url, html: home.html, robotsTxt, ua }).catch(() => []);
     const homeScripts = ctl.stop || !home ? [] : await scriptTrapIssues({ start: home.url, html: home.html, ua }).catch(() => []);
@@ -593,7 +589,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     else if (robotsTxt && !sitemap.declared) raise("sitemap_not_in_robots", origin + "/robots.txt");
     if (llms.status !== 200) raise("no_llms_txt", origin + "/llms.txt");
     for (const [id, det] of aiSiteIssues(robotsTxt, origin)) raise(id, origin + "/robots.txt", det);
-    for (const [id, u, det] of [...crawlSite, ...robotsChanges, ...favicon, ...homeScripts]) raise(id, u, det);
+    for (const [id, u, det] of [...crawlSite, ...robotsChanges, ...favicon, ...homeScripts, ...blockedChecks, ...sitemap.problems]) raise(id, u, det);
+    for (const [id, u, det] of [...canonicalSiteIssues(pages, start), ...soft404Issues(pages, { start, notFoundHash })]) raise(id, u, det);
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     db.exec("COMMIT");
 
@@ -603,8 +600,9 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const errPages = get("SELECT COUNT(DISTINCT url) n FROM issues WHERE audit_id=? AND severity='error' AND check_id NOT LIKE 'ai_%'", auditId).n;
     const warnOnly = get("SELECT COUNT(DISTINCT url) n FROM issues WHERE audit_id=? AND severity='warning' AND check_id NOT LIKE 'ai_%' AND url NOT IN (SELECT url FROM issues WHERE audit_id=? AND severity='error')", auditId, auditId).n;
     const health = healthScore(pages.length, errPages, warnOnly);
-    const aiRows = all("SELECT url, severity FROM issues WHERE audit_id=? AND check_id LIKE 'ai_%' AND check_id <> 'ai_bot_blocked'", auditId);
-    const blocks = get("SELECT COUNT(*) n FROM issues WHERE audit_id=? AND check_id='ai_bot_blocked'", auditId).n;
+    // Only blocked search/answer fetchers cost points; training opt-outs (Google-Extended, GPTBot…) cost nothing.
+    const aiRows = all("SELECT url, severity FROM issues WHERE audit_id=? AND check_id LIKE 'ai_%' AND check_id NOT IN ('ai_search_bot_blocked', 'ai_training_optout')", auditId);
+    const blocks = get("SELECT COUNT(*) n FROM issues WHERE audit_id=? AND check_id='ai_search_bot_blocked'", auditId).n;
     const aiScore = aiReadiness(aiRows, pages.filter((p) => p.indexable).length, blocks);
     const siteInfo = { robotsTxt: Boolean(robotsTxt), sitemapUrls: sitemap.urls.size, sitemapDeclared: sitemap.declared, llmsTxt: llms.status === 200,
       aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: Boolean(settings.renderJs) };

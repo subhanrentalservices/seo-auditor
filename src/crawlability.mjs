@@ -2,14 +2,16 @@
 // Google Search Central's crawling docs (robots.txt handling, soft 404s, host variants, blocked resources) plus the
 // helpers the crawler uses for page-level ones. Read-only: a few extra requests per audit.
 import robotsParser from "robots-parser";
+import { robotsDirectives, metaRobotsTags } from "./google-signals.mjs";
 
-/** One request without following redirects; network errors keep their code (ENOTFOUND, ERR_TLS_CERT_ALTNAME_INVALID, …). */
+/** One request without following redirects; network errors keep their code (ENOTFOUND, ERR_TLS_CERT_ALTNAME_INVALID, …).
+ *  The HTML body is kept for 200 and for 4xx/5xx error pages (the site's 404 page is compared with crawled pages). */
 export async function probe(url, ua, timeout = 15000) {
   try {
     const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(timeout), headers: { "User-Agent": ua, Accept: "text/html,*/*;q=0.8" } });
     const type = res.headers.get("content-type") || "";
-    const body = res.status === 200 && /html/.test(type) ? (await res.text()).slice(0, 2_000_000) : "";
-    return { status: res.status, location: res.headers.get("location"), body };
+    const body = (res.status === 200 || res.status >= 400) && /html/.test(type) ? (await res.text()).slice(0, 2_000_000) : "";
+    return { status: res.status, location: res.headers.get("location"), body, xRobots: res.headers.get("x-robots-tag") || "" };
   } catch (e) {
     const code = e.cause?.code || e.code || (e.name === "TimeoutError" ? "TIMEOUT" : "ERROR");
     return { status: 0, error: code, detail: e.cause?.message || e.message };
@@ -60,8 +62,9 @@ const assetUrls = (html, base) => {
   return [...out].map((x) => { try { return new URL(x, base).href; } catch { return null; } }).filter((x) => x && new URL(x).origin === new URL(base).origin);
 };
 
-/** Site checks: robots.txt errors, size and blanket disallow, blocked CSS/JS, soft 404s, host variants. Returns [[id, url, detail]]. */
-export async function crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua, get = probe }) {
+/** Site checks: robots.txt errors, size and blanket disallow, blocked CSS/JS, soft 404s, host variants. Returns [[id, url, detail]].
+ *  keep (optional object): receives notFound = { url, status, body } from the missing-page probe. */
+export async function crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua, get = probe, keep = {} }) {
   const origin = new URL(start).origin, out = [];
   if (robotsRes.status >= 500 || robotsRes.status === 0 || robotsRes.error)
     out.push(["robots_txt_error", origin + "/robots.txt", robotsRes.error ? `no response (${robotsRes.error})` : `HTTP ${robotsRes.status}`]);
@@ -74,8 +77,28 @@ export async function crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robo
   }
   const missing = `${origin}/seo-auditor-missing-page-${Date.now().toString(36)}.html`;
   const r404 = await get(missing, ua);
+  keep.notFound = { url: missing, status: r404.status, body: r404.body || "" };
   if (r404.status === 200) out.push(["soft_404", missing, "a page that doesn't exist answers HTTP 200"]);
   out.push(...(await hostVariants(start, ua, get)));
+  return out;
+}
+
+/** Robots-blocked URLs the site links to or lists in its sitemap (blocked rows of the audit's pages): Google can't
+ *  fetch them, so it never sees a noindex on them and can index the bare URL from links (robots.txt intro; Gary
+ *  Illyes, 2022). Up to `max` of them (most-linked first) are fetched once, ignoring robots.txt, to look for noindex.
+ *  Returns [[id, url, detail]]: robots_blocked_noindex, or robots_blocked_linked for one with 10+ internal links. */
+export async function robotsBlockedIssues(pages, { ua, get = probe, max = 50 }) {
+  const blocked = pages.filter((p) => p.data?.blockedByRobots && (p.in_sitemap || p.inlinks > 0)).sort((a, b) => (b.inlinks || 0) - (a.inlinks || 0));
+  const out = [], flagged = new Set();
+  for (const p of blocked.slice(0, max)) {
+    const r = await get(p.url, ua);
+    if (r.status !== 200) continue;
+    const src = robotsDirectives([], r.xRobots).noindex ? "X-Robots-Tag" : robotsDirectives(metaRobotsTags(r.body)).noindex ? "robots meta tag" : null;
+    if (!src) continue;
+    flagged.add(p.url);
+    out.push(["robots_blocked_noindex", p.url, `noindex in the ${src}, but robots.txt stops Google fetching the page to see it` + (p.inlinks ? `; ${p.inlinks} internal page(s) link here` : "") + (p.in_sitemap ? "; listed in the sitemap" : "")]);
+  }
+  for (const p of blocked) if (p.inlinks >= 10 && !flagged.has(p.url)) out.push(["robots_blocked_linked", p.url, `${p.inlinks} internal pages link to this robots.txt-blocked URL`]);
   return out;
 }
 

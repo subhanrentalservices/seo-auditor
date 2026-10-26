@@ -15,7 +15,7 @@ async function gscRefresh(ctx, btn) {
   catch (e) { toast(e.message); btn.disabled = false; btn.textContent = "Fetch now"; }
 }
 
-const KIND_LABEL = { unknown: "Unknown to Google", discovered: "Discovered, not crawled", crawled: "Crawled, not indexed", duplicate: "Duplicate (Google chose another URL)",
+const KIND_LABEL = { indexed_blocked: "Indexed, though blocked by robots.txt", indexed_no_content: "Indexed without content", unknown: "Unknown to Google", discovered: "Discovered, not crawled", crawled: "Crawled, not indexed", duplicate: "Duplicate (Google chose another URL)",
   alternate: "Alternate with canonical", noindex: "noindex", redirect: "Redirect", soft404: "Soft 404", notfound: "404", blocked: "Blocked by robots.txt", server: "Server error", other: "Other" };
 
 // Index status: URL Inspection for every page the audit found indexable; the not-indexed ones grouped with a fix each.
@@ -41,7 +41,11 @@ async function indexCard(ctx) {
     h("p", { class: "hint" }, "Asks Google (URL Inspection) about every HTML page in the latest audit. Pages your site wants indexed (200 and indexable) are counted; ",
       "the rest (canonical pointing elsewhere, noindex, redirects) should stay out of Google and are listed as expected. Search Console's \"not indexed\" count also includes old URLs nothing links to any more. ",
       last ? `Last check ${new Date(last.started_at.replace(" ", "T") + "Z").toLocaleString("en-AU")}${last.status === "stopped" ? " (stopped: daily inspection limit)" : ""}.` : "Not checked yet."),
-    d.total ? h("div", { class: "grid g4" }, tile("Pages to index", num(d.total)), tile("Indexed", num(d.indexed)), tile("Not indexed (to fix)", num(d.notIndexed)), tile("Expected out of Google", num(d.expected))) : null,
+    d.total ? h("div", { class: "grid g4" }, tile("Pages to index", num(d.total)), tile("Indexed", d.indexedProblems ? `${num(d.indexed)} + ${num(d.indexedProblems)} with problems` : num(d.indexed)), tile("Not indexed (to fix)", num(d.notIndexed)), tile("Expected out of Google", num(d.expected))) : null,
+    (d.rises || []).length ? h("p", { class: "small down" }, "Grew since the previous check: ", d.rises.map((x) => `${KIND_LABEL[x.kind] || x.kind} ${num(x.from)} → ${num(x.to)}`).join(" · "), ". Look for a recent site change (template, robots.txt, redirects).") : null,
+    (d.folders || []).length > 1 ? h("details", {}, h("summary", { class: "small" }, "Not indexed by section (sections with 10+ checked pages)"),
+      table([{ label: "Section", key: "folder" }, { label: "Checked", num: true, get: (r) => num(r.inspected) }, { label: "Not indexed", num: true, get: (r) => num(r.notIndexed) },
+        { label: "Share", num: true, get: (r) => `${Math.round(r.share * 100)}%` }], d.folders)) : null,
     stray.length ? h("p", { class: "small" }, `Indexed although your site keeps them out (canonical elsewhere, noindex or redirect): ${stray.map((r) => shortUrl(r.url, base)).join(", ")}. Check the canonical and links.`) : null,
     d.errors ? h("p", { class: "small" }, `${d.errors} pages could not be checked: ${d.rows.filter((r) => r.error)[0].error}`) : null,
     bad.length ? table([

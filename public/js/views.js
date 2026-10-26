@@ -30,7 +30,7 @@ VIEWS.projects = async (ctx) => {
       h("div", { class: "card-h" }, h("div", {}, h("h2", {}, h("a", { href: `#/p/${p.id}/overview` }, p.name)), h("div", { class: "small muted" }, p.start_url)),
         p.running ? h("span", { class: "badge notice" }, "Audit running…") : null),
       a ? h("div", { class: "grid g2", style: { alignItems: "center" } },
-        h("div", { class: "row", style: { gap: "18px" } }, meter(a.health, "Site Health"), meter(a.ai_readiness, "AI Readiness")),
+        h("div", { class: "row", style: { gap: "18px" } }, meter(a.health, "Site Health", null, "tool score, not a Google metric"), meter(a.ai_readiness, "AI Readiness", null, "tool score, not a Google metric")),
         h("div", { class: "grid g3" },
           stat("Errors", a.errors, "error"), stat("Warnings", a.warnings, "warning"), stat("Notices", a.notices, "notice"),
           h("div", { class: "small muted", style: { gridColumn: "1/-1" } }, `${num(a.pages_crawled)} pages · ${when(a.finished_at)}`,
@@ -59,8 +59,8 @@ VIEWS.overview = async (ctx) => {
   const extra = (await Promise.all((overviewCards).map((f) => f(ctx).catch(() => null)))).filter(Boolean);
   return [
     h("div", { class: "grid g4" },
-      h("div", { class: "card", title: "Site Health = 100 × (1 − (pages with errors + ½ × pages with only warnings) ÷ pages crawled)" }, meter(a.health, "Site Health", pr ? `${a.health - pr.health >= 0 ? "+" : ""}${a.health - pr.health}` : null)),
-      h("div", { class: "card" }, meter(a.ai_readiness, "AI Readiness", pr?.ai_readiness !== null && pr?.ai_readiness !== undefined ? `${a.ai_readiness - pr.ai_readiness >= 0 ? "+" : ""}${a.ai_readiness - pr.ai_readiness}` : null)),
+      h("div", { class: "card", title: "This tool's score, not a Google metric. Site Health = 100 × (1 − (pages with errors + ½ × pages with only warnings) ÷ pages crawled)" }, meter(a.health, "Site Health", pr ? `${a.health - pr.health >= 0 ? "+" : ""}${a.health - pr.health}` : null, "tool score, not a Google metric")),
+      h("div", { class: "card", title: "This tool's score, not a Google metric" }, meter(a.ai_readiness, "AI Readiness", pr?.ai_readiness !== null && pr?.ai_readiness !== undefined ? `${a.ai_readiness - pr.ai_readiness >= 0 ? "+" : ""}${a.ai_readiness - pr.ai_readiness}` : null, "tool score, not a Google metric")),
       h("div", { class: "card" }, stat("Pages crawled", a.pages_crawled, null, d("pages_crawled"), false), h("div", { class: "small muted" }, `${num(info.sitemapUrls)} in sitemap`)),
       h("div", { class: "card grid g3", style: { gap: "8px" } }, stat("Errors", a.errors, "error", d("errors")), stat("Warnings", a.warnings, "warning", d("warnings")), stat("Notices", a.notices, "notice", d("notices")))),
     extra.length ? extra : null,
@@ -107,7 +107,7 @@ VIEWS.issues = async (ctx) => {
     mount(listEl, rows);
   };
   draw();
-  return [h("div", { class: "row", style: { justifyContent: "space-between" } }, h("p", { class: "hint", style: { margin: 0 } }, "Click an issue for why it matters, how to fix it and the affected URLs. AI-search issues don't count toward Site Health."),
+  return [h("div", { class: "row", style: { justifyContent: "space-between" } }, h("p", { class: "hint", style: { margin: 0 } }, "Click an issue for why it matters, how to fix it and the affected URLs. AI-search issues and notices (including items marked information: not a Google ranking issue) don't count toward Site Health, which is this tool's score, not a Google metric."),
     h("div", { class: "row" }, h("a", { class: "btn sm", href: `/api/audits/${aid}/export/issues.csv` }, "Export issues CSV"), h("a", { class: "btn sm", href: `/api/audits/${aid}/export/links.csv` }, "Export links CSV"))),
     tabBar, listEl];
 };
@@ -225,10 +225,11 @@ VIEWS.ai = async (ctx) => {
   const ai = groups.filter((g) => g.ai && g.count);
   const bots = a.site_info?.aiBots || [];
   return [h("div", { class: "grid g2" },
-    h("div", { class: "card" }, meter(a.ai_readiness, "AI Readiness"),
-      h("p", { class: "hint" }, "How easily AI search (Google AI Overviews and AI Mode, ChatGPT search, Perplexity, Copilot) can fetch, understand and quote your pages. Each indexable page starts at 100 and loses points per AI issue; blocked AI crawlers cost 15 points each.")),
+    h("div", { class: "card" }, meter(a.ai_readiness, "AI Readiness", null, "tool score, not a Google metric"),
+      h("p", { class: "hint" }, "This tool's estimate of how easily AI search (Google AI Overviews and AI Mode, ChatGPT search, Perplexity, Copilot) can fetch, understand and quote your pages; not a Google metric. Each indexable page starts at 100 and loses points per AI issue; each blocked AI search crawler costs 15 points. Training opt-outs (Google-Extended, GPTBot, ClaudeBot…) cost nothing: blocking them doesn't affect search.")),
     h("div", { class: "card" }, h("h2", {}, "AI crawler access (robots.txt)"),
-      table([{ label: "Crawler", key: "bot" }, { label: "Access", get: (r) => (r.allowed ? h("span", { class: "up" }, "✓ allowed") : h("span", { class: "down" }, "✕ blocked")) }], bots),
+      table([{ label: "Crawler", key: "bot" }, { label: "Purpose", get: (r) => ({ search: "Search / answers", training: "Training opt-out token", other: "Other (not Search)" })[r.kind] || "–" },
+        { label: "Access", get: (r) => (r.allowed ? h("span", { class: "up" }, "✓ allowed") : h("span", { class: r.kind === "search" || !r.kind ? "down" : "muted" }, "✕ blocked")) }], bots),
       h("p", { class: "small muted" }, a.site_info?.llmsTxt ? "llms.txt: found (optional; Google ignores it)." : "llms.txt: not found (optional; Google ignores it)."))),
     h("div", { class: "card", style: { padding: "6px 10px" } }, ai.length ? ai.map((g) => issueRow(ctx, a.id, g, false)) : h("div", { class: "empty" }, "No AI-search issues found."))];
 };
@@ -270,6 +271,7 @@ VIEWS.settings = async (ctx) => {
     maxPages: h("input", { type: "number", min: 0, value: s.maxPages }), concurrency: h("input", { type: "number", min: 1, max: 20, value: s.concurrency }),
     renderJs: h("input", { type: "checkbox", checked: s.renderJs }), respectRobots: h("input", { type: "checkbox", checked: s.respectRobots }),
     includeSubdomains: h("input", { type: "checkbox", checked: s.includeSubdomains }), checkExternalLinks: h("input", { type: "checkbox", checked: s.checkExternalLinks }),
+    auditBlockedUrls: h("input", { type: "checkbox", checked: s.auditBlockedUrls === true }),
     schedule: h("select", {}, [["off", "Off"], ["daily", "Daily"], ["weekly", "Weekly"]].map(([v, l]) => h("option", { value: v, selected: s.schedule === v }, l))),
     cwvPages: h("input", { type: "number", min: 0, max: 50, value: s.cwvPages }), gscProperty: h("input", { type: "text", value: s.gscProperty, placeholder: "sc-domain:example.com or https://example.com/" }),
     localFolder: h("input", { type: "text", value: s.localFolder || "", placeholder: "C:\\path\\to\\site (optional)" }),
@@ -292,6 +294,7 @@ VIEWS.settings = async (ctx) => {
     ...row("Page limit", f.maxPages, "0 = no limit"), ...row("Parallel requests", f.concurrency, "Lower (2–3) for small shared hosting"),
     ...row("Render JavaScript", f.renderJs, "Uses headless Chrome; slower. Turn on for React/Vue sites."),
     ...row("Respect robots.txt", f.respectRobots), ...row("Include subdomains", f.includeSubdomains), ...row("Check external links", f.checkExternalLinks),
+    ...row("Check robots-blocked URLs", f.auditBlockedUrls, "Fetches up to 50 robots.txt-blocked URLs your site links to, once each, to find a noindex Google can't see. Only for sites you own (off by default)."),
     ...row("Scheduled audit", f.schedule, "Runs while the app is open (it starts with Windows if enabled in README)."),
     ...row("Core Web Vitals pages", f.cwvPages, "Measured in headless Chrome after each audit (0 = off)"),
     ...row("Search Console property", f.gscProperty, "Uses the service account file; add its email as a user in Search Console."),

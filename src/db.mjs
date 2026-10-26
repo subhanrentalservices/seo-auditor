@@ -72,6 +72,7 @@ export const DEFAULT_SETTINGS = {
   renderJs: false,        // render each page in headless Chromium (slower)
   includeSubdomains: false,
   checkExternalLinks: true,
+  auditBlockedUrls: false, // opt-in: fetch robots.txt-blocked URLs the site links to once, to find a noindex Google can't see (own sites only)
   userAgent: "Mozilla/5.0 (compatible; SEOAuditor/1.0; +local)",
   schedule: "off",        // off | daily | weekly
   cwvPages: 5,            // pages measured for Core Web Vitals (0 = off)
