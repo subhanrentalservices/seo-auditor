@@ -16,7 +16,7 @@ export function mount(root, opts) {
     $("#f", root).onsubmit = async e => {
       e.preventDefault();
       const domain = typed = $("#domain", root).value.trim();
-      if (!domain) return step1("Type your website address, like ssautomotive.com.au");
+      if (!domain) return step1("Type your website address, like example.com");
       const b = $("#go", root); b.disabled = true; b.textContent = "Reading your site…";
       try { found = await api("/detect", {domain}); step2(); }
       catch (err) { step1(err.message); }

@@ -1,7 +1,7 @@
 """Workspaces: shared settings plus one folder per website.
 
     config.toml                     shared: API keys, alerts, inbox, crawl manners
-    sites/ssautomotive.com.au/
+    sites/example.com/
         site.toml                   this site: domain, brand, topics, competitors, your profile
         data/                       this site's database, evidence, reports
 
@@ -52,7 +52,7 @@ class Field:
 F = Field
 SCHEMA: tuple[Field, ...] = (
     # ---- this site
-    F("project", "site", "my_site", "str", "site", "Website address", "Your domain, like ssautomotive.com.au", group="site"),
+    F("project", "site", "my_site", "str", "site", "Website address", "Your domain, like example.com", group="site"),
     F("project", "brand_names", "brand_names", "list", "site", "Brand names", "How people write your business name, one per line", group="site"),
     F("project", "topics", "topics", "list", "site", "Topics", "3 to 8 things you can talk about with authority, one per line", group="site"),
     F("project", "competitors", "competitors", "list", "site", "Competitors", "2 to 6 competitor websites, one per line", group="site"),
@@ -86,7 +86,7 @@ SCHEMA: tuple[Field, ...] = (
     F("sitegraph", "max_pages", "graph_max_pages", "int", "site", "Pages to read when mapping your site",
       "Raise it if your site has more pages than this", group="checking", advanced=True),
     F("dataforseo", "language_code", "dataforseo_language_code", "str", "site", "Search language", group="extras", advanced=True),
-    F("search_console", "property", "gsc_property", "str", "site", "Search Console property", "Like sc-domain:ssautomotive.com.au", group="extras", advanced=True),
+    F("search_console", "property", "gsc_property", "str", "site", "Search Console property", "Like sc-domain:example.com", group="extras", advanced=True),
     # ---- shared by every site
     F("dataforseo", "login", "dataforseo_login", "str", "shared", "DataForSEO login", "API login from your DataForSEO dashboard", group="extras"),
     F("dataforseo", "password", "dataforseo_password", "str", "shared", "DataForSEO password", secret=True, group="extras"),
