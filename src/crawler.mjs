@@ -19,6 +19,10 @@ import { siteNameIssues, merchantPolicyIssues, localNapIssues } from "./schema-s
 import { siteProbeIssues } from "./site-probes.mjs";
 import { robotsTxtIssues } from "./robots-txt.mjs";
 import { siteRuleIssues, saveLastmods, lastmodAccuracyIssues } from "./site-rules.mjs";
+import { pageSignals, signalSiteIssues } from "./page-signals.mjs";
+import { videoUrlsOf, videoFileIssues } from "./video-checks.mjs";
+import { CTA, ctaFoldIssues } from "./fold-check.mjs";
+import { brandTerms } from "./trends.mjs";
 export { rawRenderedDiff };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
@@ -105,9 +109,6 @@ async function fetchFollow(url, ua) {
   return { ...r, finalUrl: seen.at(-1), redirect, ms: total };
 }
 
-// Button or link text that asks the visitor to act (any kind of site: book, buy, sign up, get a quote, start a trial...).
-const CTA = /^(?:[^\w]*)(book|call|ring|phone|contact|enquire|inquire|get (?:a |your |started|in touch|quote)|request|claim|apply|buy|order|shop|add to (?:cart|bag|basket)|checkout|sign ?up|register|join|subscribe|start|try|free trial|demo|schedule|download|install|quote)\b/i;
-
 // Content age: a date the page states about itself, as yyyy-mm-dd. Accepts ISO dates/timestamps, "5 January 2024"
 // and "January 5, 2024". Numeric d/m/y forms are skipped (05/01/2024 is ambiguous between countries).
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -122,8 +123,6 @@ export function isoDate(s) {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 const STATED_DATE = /(?<![a-z])(last\s+updated|last\s+modified|updated|modified|published|posted)\s*(?:on)?\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?\s+[a-z]{3,9}\.?,?\s+\d{4}|[a-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})/gi;
-// Video embeds a VideoObject should describe (YouTube, Vimeo, Wistia).
-const VIDEO_SRC = /youtube(?:-nocookie)?\.com\/(?:embed|watch)|youtu\.be\/|player\.vimeo\.com|vimeo\.com\/\d|fast\.wistia\.(?:net|com)|wistia\.com\/medias|wi\.st\//i;
 
 export function parseHtml(html, url) {
   const $ = cheerio.load(html);
@@ -181,6 +180,8 @@ export function parseHtml(html, url) {
       d.videoObjects = (d.videoObjects || 0) + 1;
       const miss = ["name", "thumbnailUrl", "uploadDate"].filter((k) => !o[k] || (Array.isArray(o[k]) && !o[k].length));
       if (miss.length) { d.videoObjectsIncomplete = (d.videoObjectsIncomplete || 0) + 1; d.videoObjectMissing ||= miss.join(", "); }
+      const vu = videoUrlsOf(o); // thumbnail and file URLs: robots.txt and reachability checks after the crawl
+      if (vu && (d.videoUrls ||= []).length < 5) d.videoUrls.push(vu);
     }
     Object.values(o).forEach(scan);
   };
@@ -206,6 +207,8 @@ export function parseHtml(html, url) {
     else if (!self) d.hreflangBad = "no self-referencing hreflang";
     // Language versions of one page: their shared text/titles are not duplicates (see site rules).
     d.hreflangAlts = [...new Set(hl.map((_, e) => normalize($(e).attr("href"), url)).get().filter(Boolean))].slice(0, 60);
+    const xd = normalize(hl.filter((_, e) => /^x-default$/i.test($(e).attr("hreflang"))).first().attr("href") || "", url);
+    if (xd) d.hreflangXDefault = xd; // compared across the cluster (hreflang.mjs)
   }
   // links. placement: "content" = in the page's own text; "nav" = template (menus, header, footer, breadcrumbs, or
   // anything outside <main> when the page has one). A menu link on every page says little about its target, so
@@ -295,12 +298,6 @@ export function parseHtml(html, url) {
   }
   const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   d.jumpLinks = new Set($('a[href^="#"]').map((_, a) => dec($(a).attr("href").slice(1))).get().filter((id) => targets.has(id))).size;
-  // Video embeds (counted before iframes are stripped from the text copy). A muted or looping <video> without
-  // controls (often started by script) is a decorative background, not a video for search.
-  const vids = $c.find("iframe").filter((_, f) => VIDEO_SRC.test($(f).attr("src") || $(f).attr("data-src") || "")).length
-    + $c.find('lite-youtube, lite-vimeo, [class*="wistia_async_"]').length
-    + $c.find("video").filter((_, v) => $(v).is("[controls]") || !$(v).is("[muted], [loop]")).length;
-  if (vids) d.videos = vids;
   if ($('[itemtype*="VideoObject" i]').length) d.videoObjects = (d.videoObjects || 0) + $('[itemtype*="VideoObject" i]').length; // microdata: present, fields not validated
   // text
   const $t = cheerio.load(html);
@@ -308,6 +305,8 @@ export function parseHtml(html, url) {
   const scope = $t("main").length ? $t("main") : $t("body");
   const text = scope.text().replace(/\s+/g, " ").trim();
   const words = text ? text.split(" ").length : 0;
+  // Video embeds and their position, images, spam words, keyword stuffing, script hosts (page-signals.mjs).
+  Object.assign(d, pageSignals($, { url, $c, text }));
   // Text-to-HTML ratio compares all visible text with the whole HTML (header and footer included on both sides);
   // using only <main> text against the whole file under-counted pages with a big header/footer.
   d.visibleBytes = Buffer.byteLength($t("body").text().replace(/\s+/g, " ").trim());
@@ -572,6 +571,17 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const probes = ctl.stop || settings.siteProbes !== true ? [] : await siteProbeIssues({ start, pages, robots: robotsTxt ? robots : null, ua, parse: parseHtml, notFoundHash,
       resUrls: [...resSet], seenUrls: [...extSet, ...pages.map((p) => p.canonical).filter(Boolean), ...sitemap.urls], sourceMaps: scripts.sourceMaps || [], stop: () => ctl.stop }).catch(() => []);
     const localNap = ctl.stop || !home ? [] : await localNapIssues({ url: home.url, html: home.dom }, settings).catch(() => []);
+    // VideoObject thumbnails and files (up to 20 requests, one at a time), and CTAs below the first phone screen (up
+    // to 6 pages, in the rendering browser, or in one launched for this when Lighthouse is on).
+    const videoFiles = ctl.stop ? [] : await videoFileIssues(pages, { stop: () => ctl.stop }).catch(() => []);
+    let fold = [];
+    if (!ctl.stop && (browser || settings.cwvPages > 0)) {
+      let b = browser;
+      try {
+        if (!b) { const { launchChromium } = await import("./browser.mjs"); b = await launchChromium(); }
+        fold = await ctaFoldIssues({ pages, start, browser: b, stop: () => ctl.stop });
+      } catch { /* no browser on this computer: not checked */ } finally { if (b && b !== browser) await b.close().catch(() => {}); }
+    }
     const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
     const lm = lastmodUniformity(sitemap.lastmods || []);
     // A shared date is honest after a real site-wide edit: check those pages' text against the audit before that date.
@@ -623,6 +633,9 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [id, u, det] of [...probes, ...robotsTxtIssues({ origin, status: robotsRes.status, type: robotsRes.type, text: robotsTxt }), ...siteRuleIssues(pages),
       ...lastmodAccuracyIssues(project.id, auditId, sitemap.lastmodOf, pages, origin + "/sitemap.xml")]) raise(id, u, det);
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
+    const signals = signalSiteIssues({ auditId, projectId: project.id, pages, start, cluster, brandTerms: brandTerms(project, settings), robots: robotsTxt ? robots : null,
+      robotsTxt, origin, allow: String(settings.spamAllowTerms || "").split(",").map((t) => t.trim()).filter(Boolean) });
+    for (const [id, u, det] of [...signals, ...videoFiles, ...fold]) raise(id, u, det);
     const aLinks = db.prepare("SELECT DISTINCT from_url,to_url,internal,nofollow,rel FROM links WHERE audit_id=? AND kind='a'").iterate(auditId);
     for (const [id, u, det] of [...linkSiteIssues(aLinks, { pages, redirOf, inScope, robots: robotsTxt ? robots : null, auditDate: ctx.auditDate }), ...urlVariantIssues(pages)]) raise(id, u, det);
     db.exec("COMMIT");

@@ -81,6 +81,7 @@ export const DEFAULT_SETTINGS = {
   dfsLocation: 2036,      // DataForSEO location code (2036 = Australia, 2840 = USA, 2826 = UK)
   dfsLanguage: "en",
   brandTerms: "",         // extra names that count as a brand mention in AI answers (comma-separated)
+  spamAllowTerms: "",     // words hacked_spam_signals never reports on this site, e.g. "casino" for a casino's own site (comma-separated)
   aiLocation: 0,          // DataForSEO location for AI/SERP checks (0 = same as dfsLocation; 9199156 = Dandenong VIC)
   localFolder: "",        // optional: folder with the site's files, for file/line hints
   napName: "",            // business listings: name, address and phone to check listings against
