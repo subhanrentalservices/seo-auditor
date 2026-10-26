@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { db, run, get, all } from "./db.mjs";
 import { CHECKS, pageIssues, healthScore } from "./checks.mjs";
-import { crawlabilitySiteIssues, paramTraps } from "./crawlability.mjs";
+import { crawlabilitySiteIssues, paramTraps, headClosedEarly, robotsDiff, faviconIssues, historyTraps, scriptTrapIssues } from "./crawlability.mjs";
 import { aiPageIssues, aiSiteIssues, aiBotAccess, aiReadiness } from "./ai-checks.mjs";
 import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } from "./quality.mjs";
 import { conversionIssues } from "./conversion.mjs";
@@ -27,6 +27,31 @@ export function normalize(u, base) {
   } catch { return null; }
 }
 const hostKey = (h) => h.replace(/^www\./, "");
+
+// robots.txt as fetched by each audit, so the next audit can report what changed (robots_txt_changed / _disallow_added).
+db.exec("CREATE TABLE IF NOT EXISTS audit_robots (audit_id INTEGER PRIMARY KEY REFERENCES audits(id) ON DELETE CASCADE, status INTEGER, body TEXT)");
+export const saveRobots = (auditId, status, body) => run("INSERT OR REPLACE INTO audit_robots (audit_id, status, body) VALUES (?,?,?)", auditId, status, String(body || "").slice(0, 600 * 1024));
+const robotsUsable = (s) => s === 200 || (s >= 400 && s < 500); // 4xx = no robots.txt (allow all); 5xx/timeouts are robots_txt_error
+/** Compares this audit's robots.txt with the newest earlier finished audit of the project that stored one. */
+export function robotsChangeIssues(projectId, auditId, status, body, origin) {
+  const prev = get(`SELECT a.id, r.status, r.body FROM audits a JOIN audit_robots r ON r.audit_id=a.id
+    WHERE a.project_id=? AND a.id<? AND a.status='done' ORDER BY a.id DESC LIMIT 1`, projectId, auditId);
+  if (!prev || !robotsUsable(prev.status) || !robotsUsable(status)) return [];
+  const pages = all("SELECT url, final_url FROM pages WHERE audit_id=? AND status=200 AND indexable=1", prev.id).flatMap((p) => [p.url, p.final_url || p.url]);
+  return robotsDiff(prev.status === 200 ? prev.body : "", status === 200 ? body : "", pages, origin, prev.id);
+}
+
+/** Differences between the raw HTML and the rendered DOM that matter to Google (both are parseHtml results). */
+export function rawRenderedDiff(raw, ren) {
+  const out = [];
+  if (raw.data.noindex && !ren.data.noindex) out.push("noindex in the raw HTML is removed by JavaScript (Google may skip rendering, so the page can stay out of the index)");
+  else if (!raw.data.noindex && ren.data.noindex) out.push("JavaScript adds noindex that isn't in the raw HTML");
+  else if (raw.robotsMeta !== ren.robotsMeta) out.push(`robots meta "${raw.robotsMeta || "(none)"}" in raw HTML, "${ren.robotsMeta || "(none)"}" after rendering`);
+  // A canonical set only by JavaScript is allowed (JavaScript SEO basics); changing or removing the HTML one is not.
+  if (raw.canonical && raw.canonical !== ren.canonical) out.push(ren.canonical ? `canonical ${raw.canonical} in raw HTML, ${ren.canonical} after rendering` : `canonical ${raw.canonical} removed by JavaScript`);
+  if (ren.words >= 200 && raw.words < ren.words * 0.2) out.push(`main text only after rendering: ${raw.words} words in raw HTML, ${ren.words} rendered`);
+  return out.join("; ");
+}
 
 async function fetchOnce(url, ua, method = "GET", timeout = 20000) {
   const ctl = new AbortController();
@@ -128,6 +153,12 @@ export function parseHtml(html, url) {
   const JSNAV = /(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\(|window\.open\()\s*['"]([^'"]+)/i;
   const jsNav = $("[onclick], a[href^='javascript:' i]").map((_, e) => ($(e).attr("onclick") || $(e).attr("href") || "").match(JSNAV)?.[1]).get().filter(Boolean);
   if (jsNav.length) { d.jsLinks = jsNav.length; d.jsLinkExample = jsNav[0].slice(0, 80); }
+  // Possible back-button hijacking in the page's own inline scripts (Google spam policies, Apr 2026).
+  $("script:not([src])").each((k, e) => {
+    if (d.backButton || /json|template|text\/(?!javascript)/i.test($(e).attr("type") || "")) return;
+    const found = historyTraps($(e).text());
+    if (found.length) d.backButton = `inline script #${k + 1}: ${found.join("; ")}`;
+  });
   const canon = $('link[rel="canonical"]');
   d.canonicals = canon.length;
   const canonical = canon.length ? normalize(canon.first().attr("href"), url) : null;
@@ -315,6 +346,7 @@ export function parseHtml(html, url) {
     description: ($('meta[name="description"]').attr("content") || "").trim(),
     h1: $("h1").first().text().replace(/\s+/g, " ").trim(),
     canonical, links, imgs, words, text,
+    robotsMeta: robotsMeta.trim().toLowerCase().replace(/\s+/g, " "),
     textHash: words > 50 ? createHash("md5").update(text.toLowerCase()).digest("hex") : null,
     data: d,
   };
@@ -359,6 +391,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const robotsRes = await fetchFollow(origin + "/robots.txt", ua);
     const robotsTxt = robotsRes.status === 200 ? robotsRes.body : "";
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
+    saveRobots(auditId, robotsRes.status, robotsTxt);
+    let home = null; // the start page's raw HTML, for the favicon and script checks
     const sitemap = await loadSitemaps(origin, robotsTxt, ua);
     const llms = await fetchOnce(origin + "/llms.txt", ua, "GET");
     if (settings.renderJs) { const { launchChromium } = await import("./browser.mjs"); browser = await launchChromium(); }
@@ -385,15 +419,21 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         const r = await fetchFollow(url, ua);
         const final = r.finalUrl;
         let html = r.body;
-        let jsWordsRaw = null;
+        let jsWordsRaw = null, raw = null;
         if (browser && r.status === 200 && /html/.test(r.type)) {
-          const rawWords = parseHtml(html, final).words;
+          const rawParse = parseHtml(html, final);
           const rendered = await renderPage(browser, final, ua);
-          if (rendered) { jsWordsRaw = rawWords; html = rendered; }
+          if (rendered) { jsWordsRaw = rawParse.words; raw = rawParse; html = rendered; }
         }
         const isHtml = /html/.test(r.type) && r.status === 200;
         const p = isHtml ? parseHtml(html, final) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], words: 0, text: "", data: {} };
         const d = { ...p.data, redirect: r.redirect || undefined, error: r.error };
+        if (isHtml) {
+          const hc = headClosedEarly(r.body); // always the raw source: a rendered DOM has already been repaired
+          if (hc) d.headClosedEarly = hc;
+          if (raw) { const diff = rawRenderedDiff(raw, p); if (diff) d.rawVsRendered = diff; }
+          if (url === start) home = { html: r.body, url: final };
+        }
         const xr = r.headers.get("x-robots-tag") || "";
         if (/noindex/i.test(xr)) { d.noindex = true; d.noindexSource = "X-Robots-Tag"; } else if (d.noindex) d.noindexSource = "meta robots";
         if (jsWordsRaw !== null) { d.jsWordsRaw = jsWordsRaw; d.jsWordsRendered = p.words; }
@@ -495,6 +535,9 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const near = similarForAudit(auditId, { min: 0.5 }).filter((x) => cluster(x.a) !== cluster(x.b));
     const access = ctl.stop ? null : await crawlerAccess(start, ua);
     const crawlSite = ctl.stop ? [] : await crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua }).catch(() => []);
+    const robotsChanges = robotsChangeIssues(project.id, auditId, robotsRes.status, robotsTxt, origin);
+    const favicon = ctl.stop || !home ? [] : await faviconIssues({ start: home.url, html: home.html, robotsTxt, ua }).catch(() => []);
+    const homeScripts = ctl.stop || !home ? [] : await scriptTrapIssues({ start: home.url, html: home.html, ua }).catch(() => []);
     const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
     const lm = lastmodUniformity(sitemap.lastmods || []);
     // A shared date is honest after a real site-wide edit: check those pages' text against the audit before that date.
@@ -539,7 +582,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     else if (robotsTxt && !sitemap.declared) raise("sitemap_not_in_robots", origin + "/robots.txt");
     if (llms.status !== 200) raise("no_llms_txt", origin + "/llms.txt");
     for (const [id, det] of aiSiteIssues(robotsTxt, origin)) raise(id, origin + "/robots.txt", det);
-    for (const [id, u, det] of crawlSite) raise(id, u, det);
+    for (const [id, u, det] of [...crawlSite, ...robotsChanges, ...favicon, ...homeScripts]) raise(id, u, det);
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     db.exec("COMMIT");
 

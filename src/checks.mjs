@@ -36,7 +36,7 @@ export const CHECKS = {
   external_link_blocked: ["notice", "External link refused the checker (401/403/429)", "The site blocks automated checks; the link usually works in a browser.", "Open the link manually to confirm it still works."],
   broken_external_link: ["warning", "Broken external links", "Dead outbound links look neglected.", "Update or remove the link."],
   slow_page: ["warning", "Slow server response (over 1.5 s)", "Slow pages hurt users and Core Web Vitals.", "Enable caching/compression and reduce server work."],
-  large_html: ["warning", "Large HTML (over 2 MB)", "Heavy pages load slowly on mobile.", "Trim inline code, images or data from the HTML."],
+  large_html: ["warning", "Large HTML (over 2 MB uncompressed)", "When crawling for Google Search, Googlebot reads only the first 2 MB of an HTML file (64 MB for a PDF) and ignores the rest, so text, links and structured data past that point aren't indexed (Googlebot docs, file size limits clarified 3 Feb 2026). The limit is on the uncompressed HTML; images, CSS and JS files are fetched separately. Heavy pages also load slowly on mobile.", "Bring the HTML under 2 MB: move inline scripts, styles, SVG sprites, base64 images and embedded JSON data into separate files, and paginate very long lists. Keep the main content, canonical and structured data near the top."],
   missing_viewport: ["warning", "Missing viewport meta tag", "Without it, mobile browsers render a desktop layout.", "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">."],
   noindex_in_sitemap: ["warning", "Noindex page listed in sitemap", "Conflicting signals: the sitemap asks to index a noindex page.", "Remove it from the sitemap or allow indexing."],
   sitemap_orphan: ["notice", "Orphan pages (in sitemap, no internal links)", "Pages with no internal links are hard to discover and rank.", "Link to them from related pages and navigation."],
@@ -55,7 +55,7 @@ export const CHECKS = {
   url_too_long: ["notice", "URL too long (over 115 characters)", "Long URLs are harder to share and may be truncated.", "Use shorter, readable URLs."],
   not_in_sitemap: ["notice", "Indexable pages missing from the sitemap", "Sitemaps help discovery of every page you want indexed.", "Add them to the XML sitemap."],
   missing_og: ["notice", "Missing Open Graph tags", "Shared links show a poor preview on social media and chat apps.", "Add og:title, og:description and og:image."],
-  missing_jsonld: ["notice", "No structured data", "Structured data can earn rich results and helps AI systems understand the page.", "Add relevant schema.org JSON-LD (Organization, LocalBusiness, Article, FAQ…)."],
+  missing_jsonld: ["notice", "No structured data", "Structured data helps Google understand the page and is required for rich results (only some types still earn one: see Google's search gallery). It is not a ranking factor on its own.", "Add JSON-LD in the server HTML for what the page really is: Organization or LocalBusiness on the home page, Article/BlogPosting, Product, BreadcrumbList, VideoObject. FAQ and HowTo no longer earn rich results (FAQ stopped 7 May 2026, HowTo 2023)."],
   dup_title_h1: ["notice", "Title and H1 are identical", "A missed chance to target a second phrasing.", "Vary the H1 and title slightly."],
   many_links: ["notice", "Too many on-page links (over 300)", "Link equity is spread thin and the page is hard to use.", "Trim navigation and repeated links."],
   external_nofollow_all: ["notice", "All external links are nofollow", "Normal editorial links don't need nofollow.", "Use nofollow only for paid/untrusted links (sponsored/ugc)."],
@@ -95,13 +95,22 @@ export const CHECKS = {
   sitemap_blocked: ["error", "Sitemap lists URLs blocked by robots.txt", "The sitemap asks Google to crawl pages robots.txt forbids, so they can't be indexed properly.", "Remove those URLs from the sitemap, or allow them in robots.txt."],
   links_to_redirect: ["notice", "Internal links point at redirecting URLs", "Every redirect is an extra fetch for crawlers and an extra hop for visitors.", "Point the links straight at the final URL."],
   param_trap: ["warning", "Many ?parameter copies of one page", "Crawlers spend their visits on endless variants of the same page instead of real pages.", "Link to the clean URL, give variants a canonical to it, or stop generating crawlable parameter links."],
+
+  // ---------------- Google crawl checks (REQ-046, Google Search Central docs, Oct 2026) ----------------
+  head_closed_early: ["warning", "Head closed early: canonical or hreflang ends up in the body", "In the raw HTML an element that isn't allowed in <head> (a div, img, iframe, span, stray text…) comes before the canonical or hreflang links. HTML parsers, Google's included, close the head at that element, so the tags after it land in the body. Google accepts rel=canonical and hreflang only inside a valid <head> (canonical and hreflang docs). A robots meta tag in the body is still honoured by Google (robots meta tag doc, Mar 2026).", "Move the canonical, hreflang and robots tags above the element named in the detail, or move that element into the <body> (often an injected <div>, an <img> or <iframe> tracking pixel, or a stray character). Check with View Source: DevTools shows the repaired DOM, not the source."],
+  robots_txt_changed: ["notice", "robots.txt changed since the last audit", "robots.txt controls what every crawler may fetch; an unplanned edit (a CMS or plugin setting, a staging file copied live) can block pages without anyone noticing. Google usually caches robots.txt for up to 24 hours, so a change takes effect within about a day.", "Check that the change in the detail was intended. Search Console's robots.txt report shows the version Google last fetched."],
+  robots_disallow_added: ["warning", "New robots.txt rule blocks pages that were indexable", "A Disallow rule added since the last audit stops Googlebot fetching pages that were indexable then, or the whole site. Google can't recrawl blocked pages: their URLs can still show in results but without a description, and updates to them aren't seen (robots.txt introduction).", "If the block wasn't intended, remove or narrow the rule. To keep a page out of Google, leave it crawlable and use noindex instead of Disallow."],
+  favicon_issue: ["notice", "Home page favicon problem", "Google shows a site's favicon next to its results only when the home page declares one with <link rel=\"icon\"> (or shortcut icon / apple-touch-icon), Googlebot-Image may crawl the file, and the image is square, at least 8x8 px (over 48x48 recommended), in BMP, GIF, ICO, PNG, JPEG, PPM or TIFF (favicon guidelines). One favicon per host name.", "Add <link rel=\"icon\" href=\"/favicon.ico\"> (or a PNG) to the home page's <head>, serve it with HTTP 200, allow it in robots.txt, and use a square image of 48x48 px or larger (e.g. 96x96 or 192x192). Keep its URL stable."],
+  back_button_hijack: ["warning", "Possible back-button hijacking script", "Since 13 April 2026 Google's spam policies (malicious practices) name back-button hijacking: scripts that insert or replace history entries so the back button doesn't return to the previous page. Enforcement began 15 June 2026 with manual actions or automated demotions. Google notes it often comes from an included library or ad platform.", "Open the script named in the detail and remove or disable code that calls history.pushState in a popstate handler, pushes entries in a loop, or redirects when the visitor presses back; for a third-party tag, remove it or ask the vendor. This is a heuristic: confirm by pressing back in a browser."],
+  raw_vs_rendered: ["warning", "Raw HTML and rendered page disagree (canonical, robots or main text)", "Google reads the raw HTML first and renders JavaScript later. With noindex in the raw HTML Google may skip rendering, so JavaScript can't remove it; a canonical that JavaScript changes or removes conflicts with the original HTML (JavaScript SEO basics). Text that appears only after rendering is missed by crawlers that don't run JavaScript. Checked only when JavaScript rendering is on.", "Put the final canonical and robots meta in the server's HTML and don't change them with JavaScript; never ship noindex in the raw HTML of a page that should be indexed. Server-render or pre-render the main content."],
 };
 
 /** Checks shown under the Crawlability tab: can search engines reach and fetch the pages? */
 export const CRAWL = new Set(["http_4xx", "http_5xx", "broken_internal_link", "redirect_chain", "temporary_redirect", "permanent_redirect", "very_slow", "http_page",
   "blocked_by_robots", "no_robots_txt", "no_sitemap", "sitemap_not_in_robots", "sitemap_bad_url", "noindex_in_sitemap", "sitemap_orphan", "not_in_sitemap", "deep_page",
   "single_inlink", "nofollow_internal", "url_too_long", "robots_txt_error", "robots_disallow_all", "robots_txt_large", "robots_blocks_resources", "soft_404",
-  "host_variant_tls", "host_variant_missing", "host_variant_redirect", "uncrawlable_links", "meta_refresh", "nofollow_page", "sitemap_blocked", "links_to_redirect", "param_trap"]);
+  "host_variant_tls", "host_variant_missing", "host_variant_redirect", "uncrawlable_links", "meta_refresh", "nofollow_page", "sitemap_blocked", "links_to_redirect", "param_trap",
+  "head_closed_early", "robots_txt_changed", "robots_disallow_added", "raw_vs_rendered"]);
 
 export const SEVERITY = (id) => CHECKS[id][0];
 
@@ -149,7 +158,7 @@ export function pageIssues(p, ctx) {
   if (d.variantOf) return out;
   if (p.status !== 200 || !isHtml) return out;
 
-  if (p.bytes > 2 * 1024 * 1024) add("large_html", `${Math.round(p.bytes / 1024)} KB`);
+  if (p.bytes > 2 * 1024 * 1024) add("large_html", `${Math.ceil(p.bytes / 1024)} KB uncompressed; Googlebot reads only the first 2,048 KB`);
   if (!p.indexable && d.noindex) add("noindex_page", d.noindexSource || "");
   if (!p.title) add("missing_title");
   else if (p.title.length > 65) add("title_too_long", `${p.title.length} chars`);
@@ -180,6 +189,9 @@ export function pageIssues(p, ctx) {
   if (d.jsLinks) add("uncrawlable_links", `${d.jsLinks} link(s)${d.jsLinkExample ? `, e.g. ${d.jsLinkExample}` : ""}`);
   if (d.metaRefresh) add("meta_refresh", d.metaRefresh);
   if (d.nofollowMeta) add("nofollow_page");
+  if (d.headClosedEarly) { const h = d.headClosedEarly; add("head_closed_early", `${h.element} on line ${h.line} closes the head; after it: ${h.tags.join(", ")}${h.robots ? ", robots meta (Google still honours that one)" : ""}`); }
+  if (d.rawVsRendered) add("raw_vs_rendered", d.rawVsRendered);
+  if (d.backButton) add("back_button_hijack", `possible, in ${d.backButton}`);
   if (d.externalLinks > 2 && d.externalLinks === d.externalNofollow) add("external_nofollow_all");
   if (p.depth > 3) add("deep_page", `depth ${p.depth}`);
   if (p.indexable && ctx.sitemapLoaded && !p.in_sitemap) add("not_in_sitemap");
