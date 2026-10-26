@@ -7,6 +7,7 @@ import "./views-paid.js"; // after views-data: it anchors its nav entries to "se
 import "./views-ai.js";
 import "./views-report.js";
 import "./views-ideas.js";
+import "./views-local.js";
 
 NAV.splice(NAV.findIndex((n) => n.view === "ai") + 1, 0, { view: "performance", label: "Performance" });
 

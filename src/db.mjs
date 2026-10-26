@@ -81,6 +81,9 @@ export const DEFAULT_SETTINGS = {
   brandTerms: "",         // extra names that count as a brand mention in AI answers (comma-separated)
   aiLocation: 0,          // DataForSEO location for AI/SERP checks (0 = same as dfsLocation; 9199156 = Dandenong VIC)
   localFolder: "",        // optional: folder with the site's files, for file/line hints
+  napName: "",            // business listings: name, address and phone to check listings against
+  napAddress: "",         // (empty = read from the home page's LocalBusiness JSON-LD)
+  napPhone: "",
 };
 
 export const all = (sql, ...p) => db.prepare(sql).all(...p);

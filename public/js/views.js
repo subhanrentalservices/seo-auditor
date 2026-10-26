@@ -276,6 +276,9 @@ VIEWS.settings = async (ctx) => {
     dfsLocation: h("input", { type: "number", min: 0, value: s.dfsLocation }), aiLocation: h("input", { type: "number", min: 0, value: s.aiLocation }),
     brandTerms: h("input", { type: "text", value: s.brandTerms || "", placeholder: "e.g. Acme Plumbing, Acme" }),
     userAgent: h("input", { type: "text", value: s.userAgent }),
+    napName: h("input", { type: "text", value: s.napName || "", placeholder: "From the home page's schema when empty" }),
+    napAddress: h("input", { type: "text", value: s.napAddress || "", placeholder: "e.g. 5 Main Street, Springfield VIC 3000" }),
+    napPhone: h("input", { type: "text", value: s.napPhone || "", placeholder: "e.g. 03 9000 0000" }),
   };
   const row = (label, el, hint) => [h("label", {}, label), h("div", {}, el, hint ? h("div", { class: "small muted" }, hint) : null)];
   const save = async (e) => {
@@ -296,6 +299,8 @@ VIEWS.settings = async (ctx) => {
     ...row("Keyword country (DataForSEO)", f.dfsLocation, "Location code: 2036 Australia, 2840 USA, 2826 UK, 2124 Canada"),
     ...row("Local search location", f.aiLocation, "City code for Google / AI Mode checks, e.g. 9199156 = Dandenong VIC. 0 = same as country."),
     ...row("Brand names", f.brandTerms, "Extra names that count as a mention in AI answers (comma-separated)."),
+    ...row("Business name", f.napName, "Business listings are checked against this name, address and phone. Leave all three empty to use the home page's LocalBusiness schema."),
+    ...row("Business address", f.napAddress), ...row("Business phone", f.napPhone),
     ...row("User agent", f.userAgent),
     h("div", { class: "full row" }, h("button", { class: "btn primary" }, "Save settings")))),
   h("div", { class: "card" }, h("h2", {}, "Danger zone"), h("button", { class: "btn danger", onclick: async () => {
