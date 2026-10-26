@@ -73,6 +73,7 @@ export const DEFAULT_SETTINGS = {
   includeSubdomains: false,
   checkExternalLinks: true,
   auditBlockedUrls: false, // opt-in: fetch robots.txt-blocked URLs the site links to once, to find a noindex Google can't see (own sites only)
+  siteProbes: false,      // opt-in, own sites only: up to 60 extra requests after the crawl: search pages, Googlebot/smartphone parity, staging hosts, 304/compression, secret files, TLS expiry, language redirects
   userAgent: "Mozilla/5.0 (compatible; SEOAuditor/1.0; +local)",
   schedule: "off",        // off | daily | weekly
   cwvPages: 5,            // pages measured for Core Web Vitals (0 = off)

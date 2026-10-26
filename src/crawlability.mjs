@@ -313,16 +313,28 @@ export function historyTraps(js) {
   return [...out];
 }
 
-/** Back-button check on the same-site script files the home page loads (max 10). Returns [[id, url, detail]]. */
-export async function scriptTrapIssues({ start, html, ua, getBytes = fetchBytes, max = 10 }) {
+/** sourceMappingURL at the end of a script's text, resolved against the script; same origin and http(s) only. */
+export function sourceMapOf(js, scriptUrl) {
+  const m = String(js || "").slice(-2000).match(/[#@]\s*sourceMappingURL\s*=\s*(\S+?)\s*(?:\*\/)?\s*$/);
+  if (!m || /^data:/i.test(m[1])) return null;
+  try { const u = new URL(m[1], scriptUrl); return /^https?:$/.test(u.protocol) && u.origin === new URL(scriptUrl).origin ? u.href : null; } catch { return null; }
+}
+
+/** Back-button check on the same-site script files the home page loads (max 10). Returns [[id, url, detail]].
+ *  keep (optional object): receives sourceMaps = [{ script, map }] from the scripts' sourceMappingURL comments
+ *  (site-probes.mjs checks whether those .map files are public). */
+export async function scriptTrapIssues({ start, html, ua, getBytes = fetchBytes, max = 10, keep = {} }) {
   const out = [];
+  keep.sourceMaps = [];
   const scripts = [...String(html || "").replace(/<!--[\s\S]*?(?:-->|$)/g, "").matchAll(/<script\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi)]
     .map((m) => attr(m[0], "src")).filter(Boolean)
     .map((s) => { try { return new URL(s, start).href; } catch { return null; } }).filter((u) => u && new URL(u).origin === new URL(start).origin);
   for (const u of [...new Set(scripts)].slice(0, max)) {
     const r = await getBytes(u, ua);
     if (r.status !== 200) continue;
-    const found = historyTraps(r.bytes.toString("utf8"));
+    const js = r.bytes.toString("utf8"), map = sourceMapOf(js, u);
+    if (map) keep.sourceMaps.push({ script: u, map });
+    const found = historyTraps(js);
     if (found.length) out.push(["back_button_hijack", start, `possible, in script ${u}: ${found.join("; ")}`]);
   }
   return out;

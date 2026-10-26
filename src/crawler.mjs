@@ -16,6 +16,9 @@ import { rawRenderedDiff, renderPage, renderFindings, mergeRender, jsRedirectOf 
 import { uncrawlableLinks, anchorOf, ugcLinks, anchorFindings, linkSiteIssues, urlVariantIssues } from "./link-signals.mjs";
 import { schemaFindings } from "./schema.mjs";
 import { siteNameIssues, merchantPolicyIssues, localNapIssues } from "./schema-site.mjs";
+import { siteProbeIssues } from "./site-probes.mjs";
+import { robotsTxtIssues } from "./robots-txt.mjs";
+import { siteRuleIssues, saveLastmods, lastmodAccuracyIssues } from "./site-rules.mjs";
 export { rawRenderedDiff };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
@@ -140,6 +143,7 @@ export function parseHtml(html, url) {
   if (rd.nofollow) d.nofollowMeta = true;
   const refresh = $("meta[http-equiv]").filter((_, e) => /^refresh$/i.test($(e).attr("http-equiv"))).attr("content");
   if (refresh && /url\s*=/i.test(refresh)) d.metaRefresh = refresh.slice(0, 120);
+  if ($('input[type="password" i]').length) d.passwordField = true; // a login page (login_page_indexable)
   const jsNav = uncrawlableLinks($); // also <a> without href, #! routes, role="link" / data-href elements
   if (jsNav.length) { d.jsLinks = jsNav.length; d.jsLinkExample = jsNav[0].slice(0, 80); }
   // Possible back-button hijacking in the page's own inline scripts (Google spam policies, Apr 2026).
@@ -402,6 +406,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     };
     let home = null; // the start page's raw HTML, for the favicon and script checks
     const sitemap = await loadSitemaps(origin, robotsTxt, ua, { normalize });
+    saveLastmods(auditId, sitemap.lastmodOf); // the next audit checks them against page changes (sitemap_lastmod_inaccurate)
     const llms = await fetchOnce(origin + "/llms.txt", ua, "GET");
     if (settings.renderJs) { const { launchChromium } = await import("./browser.mjs"); browser = await launchChromium(); }
 
@@ -560,7 +565,12 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const blockedChecks = ctl.stop || !settings.respectRobots || settings.auditBlockedUrls !== true ? [] : await robotsBlockedIssues(pages, { ua }).catch(() => []);
     const robotsChanges = robotsChangeIssues(project.id, auditId, robotsRes.status, robotsTxt, origin);
     const favicon = ctl.stop || !home ? [] : await faviconIssues({ start: home.url, html: home.html, robotsTxt, ua }).catch(() => []);
-    const homeScripts = ctl.stop || !home ? [] : await scriptTrapIssues({ start: home.url, html: home.html, ua }).catch(() => []);
+    const scripts = {}; // scriptTrapIssues keeps the scripts' source map URLs here
+    const homeScripts = ctl.stop || !home ? [] : await scriptTrapIssues({ start: home.url, html: home.html, ua, keep: scripts }).catch(() => []);
+    // Extra probes (up to 60 sequential requests, setting siteProbes): search pages, smartphone/Googlebot parity,
+    // staging hosts, 304 and compression, secret files, certificate expiry, language redirects.
+    const probes = ctl.stop || settings.siteProbes !== true ? [] : await siteProbeIssues({ start, pages, robots: robotsTxt ? robots : null, ua, parse: parseHtml, notFoundHash,
+      resUrls: [...resSet], seenUrls: [...extSet, ...pages.map((p) => p.canonical).filter(Boolean), ...sitemap.urls], sourceMaps: scripts.sourceMaps || [], stop: () => ctl.stop }).catch(() => []);
     const localNap = ctl.stop || !home ? [] : await localNapIssues({ url: home.url, html: home.dom }, settings).catch(() => []);
     const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
     const lm = lastmodUniformity(sitemap.lastmods || []);
@@ -610,6 +620,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [id, u, det] of [...crawlSite, ...robotsChanges, ...favicon, ...homeScripts, ...blockedChecks, ...sitemap.problems]) raise(id, u, det);
     for (const [id, u, det] of [...canonicalSiteIssues(pages, start), ...soft404Issues(pages, { start, notFoundHash })]) raise(id, u, det);
     for (const [id, u, det] of [...siteNameIssues(pages, start), ...merchantPolicyIssues(pages, start), ...localNap]) raise(id, u, det);
+    for (const [id, u, det] of [...probes, ...robotsTxtIssues({ origin, status: robotsRes.status, type: robotsRes.type, text: robotsTxt }), ...siteRuleIssues(pages),
+      ...lastmodAccuracyIssues(project.id, auditId, sitemap.lastmodOf, pages, origin + "/sitemap.xml")]) raise(id, u, det);
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     const aLinks = db.prepare("SELECT DISTINCT from_url,to_url,internal,nofollow,rel FROM links WHERE audit_id=? AND kind='a'").iterate(auditId);
     for (const [id, u, det] of [...linkSiteIssues(aLinks, { pages, redirOf, inScope, robots: robotsTxt ? robots : null, auditDate: ctx.auditDate }), ...urlVariantIssues(pages)]) raise(id, u, det);
