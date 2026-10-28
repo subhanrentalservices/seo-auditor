@@ -169,4 +169,13 @@ export function register({ routes }) {
   routes.push(["GET", /^\/api\/projects\/(\d+)\/rank\/keyword$/, ([id], q) => keywordDetail(id, q.k)]);
   routes.push(["PUT", /^\/api\/projects\/(\d+)\/rank\/tags$/, ([id], q, b) => setTags(id, b)]);
   routes.push(["GET", /^\/api\/projects\/(\d+)\/rank\/alerts$/, ([id]) => rankAlerts(id)]);
+  // Feed the alert rules (alerts.mjs): null until the history has data, so the rule says why it's skipped.
+  return import("./alerts.mjs").then((a) => a.provideFeed("rankEvents", rankEventsFeed));
+}
+
+/** rankAlerts in the alert rules' shape: [{ type, query, from, to, impressions }], or null without history. */
+export function rankEventsFeed(projectId) {
+  const r = rankAlerts(projectId);
+  if (!r.endDate) return null;
+  return r.events.map((e) => ({ type: e.type, query: e.keyword, from: e.from, to: e.to, impressions: e.impressions.current }));
 }

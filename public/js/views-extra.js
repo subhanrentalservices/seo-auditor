@@ -10,6 +10,7 @@ import "./views-ai.js";
 import "./views-report.js";
 import "./views-ideas.js";
 import "./views-local.js";
+import "./views-alerts.js"; // last: anchors "Alerts" before Settings (after Report) and needs App settings from views-paid
 
 NAV.splice(NAV.findIndex((n) => n.view === "ai") + 1, 0, { view: "performance", label: "Performance" });
 

@@ -134,3 +134,45 @@ export function table(cols, rows, { onRow, empty = "Nothing here" } = {}) {
     h("tbody", {}, rows.map((r) => h("tr", { style: onRow ? { cursor: "pointer" } : null, onclick: onRow ? () => onRow(r) : null },
       cols.map((c) => h("td", { class: [c.num ? "num" : "", c.cls || ""].join(" ") }, c.get ? c.get(r) : r[c.key])))))));
 }
+
+/** Two or more lines over the same x labels, told apart by dash pattern as well as colour, with a legend and a
+ *  crosshair tooltip listing every series. series: [{ name, values: [number|null] }]; labels: x label per point. */
+export function multiLineChart(labels, series, { height = 170, max = 100, fmt = (v) => v, label = "" } = {}) {
+  const W = 600, H = height, L = 32, R = 10, T = 10, B = 22, STYLE = [{ stroke: "var(--pending)" }, { stroke: "var(--ink-2)", dash: "6 4" }, { stroke: "var(--amber)", dash: "2 3" }];
+  const svg = h("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": label });
+  const wrap = h("div", {}, h("div", { class: "row small muted", style: { gap: "14px" } }, series.map((s, i) => h("span", { class: "row", style: { gap: "6px" } },
+    h("svg", { width: 22, height: 8, "aria-hidden": "true" }, h("line", { x1: 0, x2: 22, y1: 4, y2: 4, stroke: STYLE[i % 3].stroke, "stroke-width": 2, "stroke-dasharray": STYLE[i % 3].dash || null })), s.name))), svg);
+  if (!labels.length) return wrap;
+  const top = max ?? Math.max(1, ...series.flatMap((s) => s.values.filter((v) => v !== null && v !== undefined)));
+  const last = labels.length - 1;
+  const X = (i) => L + (labels.length === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / last);
+  const Y = (v) => T + (1 - v / top) * (H - T - B);
+  for (const g of [0, 0.5, 1]) svg.append(h("line", { class: "gridline", x1: L, x2: W - R, y1: Y(top * g), y2: Y(top * g) }),
+    h("text", { class: "axis", x: L - 6, y: Y(top * g) + 4, "text-anchor": "end" }, fmt(Math.round(top * g))));
+  series.forEach((s, si) => {
+    const pts = s.values.map((v, i) => (v === null || v === undefined ? null : `${X(i)},${Y(v)}`)).filter(Boolean);
+    svg.append(h("polyline", { points: pts.join(" "), fill: "none", stroke: STYLE[si % 3].stroke, "stroke-width": 2, "stroke-dasharray": STYLE[si % 3].dash || null, "stroke-linejoin": "round" }));
+  });
+  svg.append(h("text", { class: "axis", x: L, y: H - 4 }, labels[0]), h("text", { class: "axis", x: W - R, y: H - 4, "text-anchor": "end" }, labels[last]));
+  const xh = h("line", { class: "xh", y1: T, y2: H - B, visibility: "hidden" });
+  const hit = h("rect", { x: L, y: 0, width: W - L - R, height: H, fill: "transparent" });
+  hit.addEventListener("mousemove", (e) => {
+    const box = svg.getBoundingClientRect(), vx = ((e.clientX - box.left) / box.width) * W;
+    const i = Math.max(0, Math.min(last, labels.length === 1 ? 0 : Math.round(((vx - L) / (W - L - R)) * last)));
+    xh.setAttribute("x1", X(i)); xh.setAttribute("x2", X(i)); xh.setAttribute("visibility", "visible");
+    tip(e, h("div", { class: "muted" }, labels[i]), series.map((s) => h("div", {}, `${s.name}: `, h("b", {}, s.values[i] === null || s.values[i] === undefined ? "–" : fmt(s.values[i])))));
+  });
+  hit.addEventListener("mouseleave", () => { xh.setAttribute("visibility", "hidden"); tip(null); });
+  svg.append(xh, hit);
+  return wrap;
+}
+
+/** Tiny trend line for a table cell (no axes); the last value is marked. */
+export function sparkline(values, { width = 90, height = 22 } = {}) {
+  const svg = h("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-hidden": "true", style: { verticalAlign: "middle" } });
+  if (!values.length) return svg;
+  const top = Math.max(1, ...values), X = (i) => (values.length === 1 ? width / 2 : 2 + (i * (width - 4)) / (values.length - 1)), Y = (v) => height - 3 - (v / top) * (height - 6);
+  svg.append(h("polyline", { points: values.map((v, i) => `${X(i)},${Y(v)}`).join(" "), fill: "none", stroke: "var(--pending)", "stroke-width": 1.5 }),
+    h("circle", { cx: X(values.length - 1), cy: Y(values.at(-1)), r: 2.5, fill: "var(--pending)" }));
+  return svg;
+}

@@ -33,6 +33,8 @@ const SEO_ICONS = {
   rank: '<path d="M4 19h16"/><path d="M7 16V11M12 16V6M17 16v-3"/>',
   explorer: '<path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/>',
   backlinks: '<path d="M9 15l6-6M7.5 11.5L5.6 13.4a3.5 3.5 0 005 5l1.9-1.9M16.5 12.5l1.9-1.9a3.5 3.5 0 00-5-5l-1.9 1.9"/>',
+  alerts: '<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
+  "issue-trends": '<path d="M4 19.5h16"/><path d="M5 15l4-5 4 3 6-7"/>',
   history: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   report: '<path d="M6 3.5h12v17H6z"/><path d="M9 8h6M9 12h6M9 16h4"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',

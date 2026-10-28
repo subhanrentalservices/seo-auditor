@@ -63,7 +63,7 @@ Paid requests run only when you press their button, and stop at the monthly budg
   that answers 401/403/503, no answer, or a bot challenge (Cloudflare, Akamai, captcha…) is read again with curl,
   then in Chrome (at most 50 pages per audit). A 429, or a 503 with Retry-After, is waited out instead (up to 60 s,
   3 minutes per audit), retried once, and the crawl drops to fewer parallel requests; it is never escalated. robots.txt
-  is obeyed by every step; nothing is disguised beyond a normal browser user agent, and no challenge is solved. *Off*
+  is obeyed by every step; every step sends the audit's own user agent (nothing is disguised), and no challenge is solved. *Off*
   keeps the plain fetch only. Checks: `bot_wall_blocked`, `fetched_via_fallback`, `crawl_rate_limited`. Pages read
   through a fallback have no response time (speed checks skip them) and aren't JavaScript-rendered.
 - **Request headers (own site)** (`requestHeaders`, up to 10): e.g. `Authorization: Basic …` for a staging site or a
@@ -72,6 +72,25 @@ Paid requests run only when you press their button, and stop at the monthly budg
   sends cookies and Basic authentication only. Values are stored in the local database, outside the settings; the
   app never shows them again, never logs them, and keeps them out of audits and exports. Host, Content-Length,
   Connection, User-Agent, Sec-*, Proxy-* and forwarding headers can't be set.
+
+## Alerts, trends and scheduled reports
+
+- **Channels** (App settings → Alerts): email over your own SMTP server, a webhook (JSON POST), a Slack-compatible
+  incoming webhook and the Windows desktop alert, each with **Send test**. At most N sends per channel per hour
+  (default 10); the same alert is sent once per period. The SMTP password and webhook addresses are stored only in
+  `data/config.json`, never shown again and removed from error messages.
+- **Rules** (each website → Alerts, each on/off): after an audit — new errors, Site Health drop (default 3 points),
+  robots.txt changed, pages turned non-indexable, new 5xx; from stored data — Search Console clicks or impressions
+  down week on week (default 30%, with minimums so small sites don't alert on noise), more pages not indexed between
+  two Index status runs, and rank drops from the rank tracker (skipped until its data exists). One message per check.
+- **Issue trends**: every issue's page count across audits; Site Health and AI Readiness over time (also on Overview).
+- **Scheduled report**: the report emailed (PDF or HTML) or saved to a folder, weekly or monthly per website.
+  **Report branding**: logo, name and colours app-wide or per website; *white label* replaces the SEO Auditor credit.
+- **When the app is closed**: schedules, alert checks and report emails only run while SEO Auditor runs. App settings
+  → *Scheduled task* (or `node src/cli.mjs schedule install --time 06:00`) adds an optional daily Windows task,
+  "SEO Auditor scheduled run", that runs due audits, then alerts and due reports, and does nothing while the app is
+  open; it runs at the next start if the PC was off. On Mac/Linux it prints a crontab line to add yourself. Remove it
+  with `schedule remove`. Log: `data/scheduled-run.log`.
 
 ## Link building (merged Backlink Verifier, 2026-10-22)
 
@@ -120,6 +139,8 @@ node src/cli.mjs add https://example.com "Example"   # add a project
 node src/cli.mjs list                                # projects and latest health
 node src/cli.mjs audit 1 [--max 200] [--js]          # crawl project 1 without the app
 node src/cli.mjs install [--autostart]               # desktop shortcut (and start with Windows)
+node src/cli.mjs schedule install [--time 06:00]     # optional daily task: audits, alerts, reports (schedule remove / status)
+node src/scheduled-run.mjs [--data <folder>]         # what that task runs (does nothing while the app is open)
 ```
 
 ## Files

@@ -1,5 +1,5 @@
 // Main screens: projects, overview, issues, pages (+ page drawer), AI audit, history/compare, settings.
-import { h, mount, api, toast, num, when, shortUrl, sevBadge, SEV_LABEL, meter, lineChart, barChart, table } from "./core.js";
+import { h, mount, api, toast, num, when, shortUrl, sevBadge, SEV_LABEL, meter, lineChart, multiLineChart, barChart, table } from "./core.js";
 
 export const VIEWS = {};
 // Sidebar entries; other modules push more (with optional `section` headers).
@@ -70,8 +70,8 @@ VIEWS.overview = async (ctx) => {
           h("a", { href: `#/p/${ctx.project.id}/issues/${g.id}` }, h("span", { class: `dot sev-${g.severity}`, "aria-hidden": "true", style: { marginRight: "8px" } }), g.title),
           h("span", { class: "row" }, g.added ? h("span", { class: "badge new" }, `${g.added} new`) : null, h("b", {}, num(g.count)))))
           : h("p", { class: "muted" }, "No SEO issues found.")),
-      h("div", { class: "card" }, h("h2", {}, "Site Health over time"),
-        hist.length > 1 ? lineChart(hist.map((x) => ({ x: when(x.finished_at), y: x.health, sub: `${x.errors} errors · ${x.warnings} warnings` })), { label: "Site Health per audit" })
+      h("div", { class: "card" }, h("h2", {}, "Site Health and AI Readiness over time"),
+        hist.length > 1 ? multiLineChart(hist.map((x) => when(x.finished_at)), [{ name: "Site Health", values: hist.map((x) => x.health) }, { name: "AI Readiness", values: hist.map((x) => x.ai_readiness) }], { label: "Site Health and AI Readiness per audit" })
           : h("p", { class: "muted" }, "The trend appears after the second audit."))),
     h("div", { class: "grid g3" },
       h("div", { class: "card" }, h("h2", {}, "Crawl depth (clicks from home)"), barChart(depth.map((r) => ({ x: r.depth === null ? "none" : String(r.depth), y: r.n })), { label: "Pages by click depth", unit: " pages" })),

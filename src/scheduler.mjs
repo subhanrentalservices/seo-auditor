@@ -1,8 +1,8 @@
-// Scheduled audits (daily / weekly per project, while the app runs) and Windows desktop alerts (own idea I9)
-// when an audit finds new errors or Site Health drops.
+// Scheduled audits (daily / weekly per project, while the app runs; scheduled-run.mjs does the same from Windows Task
+// Scheduler or cron) and the Windows desktop alert (own idea I9), now sent through alerts.mjs as its "toast" channel.
 import { execFile } from "node:child_process";
 import { all, get, projectSettings } from "./db.mjs";
-import { startAudit, activeAudit, afterAudit } from "./runner.mjs";
+import { startAudit, activeAudit } from "./runner.mjs";
 
 const PERIOD = { daily: 24 * 3600e3, weekly: 7 * 24 * 3600e3 };
 const CHECK_EVERY = 10 * 60e3;
@@ -33,23 +33,8 @@ $t=$x.GetElementsByTagName('text');[void]$t.Item(0).AppendChild($x.CreateTextNod
     (err) => { if (err) console.error("notify:", err.message); });
 }
 
-/** Message for a finished audit, or null when nothing got worse. */
-export function alertFor(auditId) {
-  const a = get("SELECT * FROM audits WHERE id=?", auditId);
-  if (!a || a.status !== "done") return null;
-  const prev = get("SELECT * FROM audits WHERE project_id=? AND id<? AND status='done' ORDER BY id DESC LIMIT 1", a.project_id, a.id);
-  if (!prev) return null;
-  const p = get("SELECT name FROM projects WHERE id=?", a.project_id);
-  const newErrors = get(`SELECT COUNT(*) n FROM (SELECT DISTINCT check_id, url FROM issues WHERE audit_id=? AND severity='error'
-    EXCEPT SELECT DISTINCT check_id, url FROM issues WHERE audit_id=? AND severity='error')`, a.id, prev.id).n;
-  const drop = prev.health - a.health;
-  if (newErrors === 0 && drop < 3) return null;
-  return { title: `${p.name}: ${drop >= 3 ? `Site Health ${prev.health} → ${a.health}` : "new SEO errors"}`,
-    body: `${newErrors} new error${newErrors === 1 ? "" : "s"} since the last audit. Open SEO Auditor to see what changed.` };
-}
-
 export function register() {
-  afterAudit.push(async (auditId) => { const m = alertFor(auditId); if (m) notify(m.title, m.body); });
+  // The after-audit Windows alert is now one channel of alerts.mjs (new errors, Site Health drop and more rules).
   setTimeout(tick, 60e3);
   setInterval(tick, CHECK_EVERY).unref?.();
 }

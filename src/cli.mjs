@@ -1,5 +1,5 @@
 // Command line: node src/cli.mjs add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2]
-//   | link-ideas <projectId> | install [--autostart]
+//   | link-ideas <projectId> | install [--autostart] | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled
 //   | change <projectId> <yyyy-mm-dd> <kind> "<summary>" <url> [url...] [--ref <commit or ticket>] | changes <projectId>
 import { all, get, run, projectSettings } from "./db.mjs";
 import { runAudit } from "./crawler.mjs";
@@ -77,8 +77,19 @@ if (cmd === "add") {
       }
     }
   } catch (e) { console.error(e.message); process.exitCode = 1; }
+} else if (cmd === "schedule") {
+  // Opt-in daily task for audits, alerts and reports while the app is closed (task-schedule.mjs).
+  const t = await import("./task-schedule.mjs"), at = process.argv.indexOf("--time");
+  try {
+    const r = a1 === "install" ? await t.installTask(at > 0 ? process.argv[at + 1] : "06:00") : a1 === "remove" ? await t.removeTask() : await t.taskStatus();
+    console.log(r.cron ? `${r.message || "On Mac or Linux, add this line with crontab -e:"}\n${r.cron}` : r.installed ? `"${t.TASK}" runs every day at ${r.time}.` : "No scheduled task.");
+  } catch (e) { console.error(e.message); process.exitCode = 1; }
+} else if (cmd === "run-scheduled") {
+  const { scheduledRun } = await import("./scheduled-run.mjs");
+  await scheduledRun();
+  process.exit();
 } else if (cmd === "install") {
   const { installDesktopShortcut, setAutostart } = await import("./desktop.mjs");
   console.log("desktop shortcut:", await installDesktopShortcut());
   if (process.argv.includes("--autostart")) console.log("start with Windows:", await setAutostart(true));
-} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId>");
+} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");

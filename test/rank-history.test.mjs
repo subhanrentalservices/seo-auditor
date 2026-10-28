@@ -226,3 +226,12 @@ test("detectEvents: a keyword that vanished from the top 10 counts as lost; no e
 test("a project without history returns an empty feed, not an error", () => {
   assert.deepEqual(rankAlerts(711).events, []);
 });
+
+test("the alert rules get rank events in their shape; no history means no feed (rule skipped with a reason)", async () => {
+  const { rankEventsFeed } = await import("../src/rank.mjs");
+  const feed = rankEventsFeed(710);
+  const drop = feed.find((e) => e.type === "drop" && e.query === "blue widgets");
+  assert.deepEqual(Object.keys(drop).sort(), ["from", "impressions", "query", "to", "type"]);
+  assert.equal(typeof drop.impressions, "number");
+  assert.equal(rankEventsFeed(711), null);
+});
