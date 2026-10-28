@@ -132,8 +132,8 @@ test("a crawl reads a walled page through curl, waits out a 429, obeys robots.tx
 
   const issues = all("SELECT check_id, url, detail FROM issues WHERE audit_id=?", auditId);
   const has = (id, u) => issues.find((i) => i.check_id === id && (!u || i.url === u));
-  assert.match(has("bot_wall_blocked", "https://example.com/walled").detail, /Cloudflare challenge page \(HTTP 403\); the page loaded via curl/);
-  assert.ok(has("fetched_via_fallback", "https://example.com/walled"));
+  assert.ok(!has("bot_wall_blocked", "https://example.com/walled")); // curl got past the wall: information only
+  assert.match(has("fetched_via_fallback", "https://example.com/walled").detail, /loaded via curl after the normal request got Cloudflare challenge page \(HTTP 403\)/);
   assert.match(has("crawl_rate_limited").detail, /HTTP 429 ×1/);
   assert.ok(!has("http_4xx", "https://example.com/walled"));
 

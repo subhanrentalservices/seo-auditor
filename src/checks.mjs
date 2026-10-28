@@ -234,11 +234,14 @@ export function pageIssues(p, ctx) {
   // Fetch ladder (fetch-ladder.mjs): a page still behind a bot wall is bot_wall_blocked, not a missing page or a
   // server error; a page read through curl or the browser has no server response time of its own.
   const direct = !d.fetchedVia || d.fetchedVia === "fetch" || d.fetchedVia === "retry";
-  if (d.botWall) {
-    const w = d.botWall, tried = d.fallbackTried?.length ? `still refused after ${d.fallbackTried.join(" and ")}` : "no fallback tried (setting or robots.txt)";
-    add("bot_wall_blocked", `${w.vendor === "unknown" ? "" : w.vendor + " "}${w.kind} page (HTTP ${w.status}); ${direct ? tried : `the page loaded via ${d.fetchedVia}`}`);
+  // A wall a fallback got past is information (fetched_via_fallback): from outside, the tool can't tell whether the
+  // firewall lets verified Googlebot through, so only a page nobody could read counts against Site Health.
+  const wallText = d.botWall && `${d.botWall.vendor === "unknown" ? "" : d.botWall.vendor + " "}${d.botWall.kind} page (HTTP ${d.botWall.status})`;
+  if (d.botWall && direct) {
+    const tried = d.fallbackTried?.length ? `still refused after ${d.fallbackTried.join(" and ")}` : "no fallback tried (setting or robots.txt)";
+    add("bot_wall_blocked", `${wallText}; ${tried}`);
   }
-  if (!direct) add("fetched_via_fallback", `loaded via ${d.fetchedVia} after the normal request got ${d.directStatus ? "HTTP " + d.directStatus : "no answer"}`);
+  if (!direct) add("fetched_via_fallback", `loaded via ${d.fetchedVia} after the normal request got ${d.botWall ? wallText : d.directStatus ? "HTTP " + d.directStatus : "no answer"}`);
   const walled = d.botWall && p.status >= 400; // reported as bot_wall_blocked
   if (!walled && p.status >= 500) add("http_5xx", `HTTP ${p.status}`);
   else if (!walled && p.status >= 400) add("http_4xx", `HTTP ${p.status}`);

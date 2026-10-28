@@ -424,8 +424,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const robotsBlocked = (u) => Boolean(settings.respectRobots && robotsTxt && robots.isAllowed(u, "SEOAuditor") === false && robots.isAllowed(u, "*") === false);
     fallbackBrowser = lazyBrowser(browser, async () => (await import("./browser.mjs")).launchChromium());
     const ladder = createLadder({ mode: settings.blockedFallback, concurrency: settings.concurrency, inScope, blocked: robotsBlocked, headersFor: extraFor,
-      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor), curl: deps.curl || curlFetch,
-      browser: deps.browser || (async (u, o) => browserFetch(await fallbackBrowser.get(), u, { ...o, blocked: (x) => inScope(x) && robotsBlocked(x) })) });
+      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor), curl: deps.curl || ((u, o) => curlFetch(u, { ...o, ua })),
+      browser: deps.browser || (async (u, o) => browserFetch(await fallbackBrowser.get(), u, { ...o, ua, blocked: (x) => inScope(x) && robotsBlocked(x) })) });
 
     const seen = new Map([[start, 0]]);
     const queue = [start];

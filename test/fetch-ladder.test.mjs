@@ -10,7 +10,7 @@ import { EventEmitter } from "node:events";
 
 process.env.SEO_AUDITOR_DATA = mkdtempSync(path.join(tmpdir(), "seo-auditor-test-")); // keep the real database untouched
 const L = await import("../src/fetch-ladder.mjs");
-const { botWall, retryAfterMs, createLadder, ladderSiteIssues, parseCurlOutput, curlConfig, curlArgs, curlFetch, browserAccess, browserFetch, lazyBrowser, BROWSER_UA } = L;
+const { botWall, retryAfterMs, createLadder, ladderSiteIssues, parseCurlOutput, curlConfig, curlArgs, curlFetch, browserAccess, browserFetch, lazyBrowser, AUDITOR_UA } = L;
 const { pageIssues, CHECKS, CRAWL } = await import("../src/checks.mjs");
 
 const S = "https://example.com";
@@ -226,7 +226,8 @@ test("curl output is parsed: 100 Continue and proxy blocks skipped, error bodies
 test("curl gets custom headers on stdin, never on its command line", async () => {
   const args = curlArgs(S + "/a");
   assert.ok(args.includes("-K") && args.includes("-") && !args.includes("-L"));
-  assert.ok(args.includes(BROWSER_UA));
+  assert.ok(args.includes(AUDITOR_UA)); // the crawler's own identity, not a browser disguise
+  assert.ok(curlArgs(S + "/a", { ua: "MyBot/2" }).includes("MyBot/2"));
   assert.equal(curlConfig({ Cookie: 'bypass="x\\y"' }), 'header = "Cookie: bypass=\\"x\\\\y\\""\n');
   let seen = null, stdin = "";
   const spawnFn = (cmd, a) => {
@@ -282,7 +283,7 @@ test("browserFetch: images and disallowed URLs are never requested; the served d
   assert.equal(r.headers.get("set-cookie"), "a=1, b=2");
   assert.deepEqual(r.redirect, { hops: 1, to: S + "/a", firstStatus: 301, finalStatus: 200 });
   assert.deepEqual(routed, [["abort", "https://example.com/logo.png"], ["abort", "https://example.com/private/data.json"], ["continue", "https://example.com/app.js"]]);
-  assert.equal(made.opts.userAgent, BROWSER_UA);
+  assert.equal(made.opts.userAgent, AUDITOR_UA);
   assert.deepEqual(made.cookies, [{ name: "bypass", value: "abc", url: S }]);
   assert.equal(made.closed, true);
 });
@@ -323,10 +324,11 @@ test("pageIssues: a walled page is bot_wall_blocked, not a 4xx; fallback pages s
   assert.deepEqual(ids(walled), ["bot_wall_blocked"]);
   assert.equal(walled[0][1], "Cloudflare challenge page (HTTP 403); still refused after curl and the browser");
   const viaCurl = pageIssues(pg({ botWall: { vendor: "unknown", kind: "captcha", status: 403 }, fetchedVia: "curl", directStatus: 403 }, { response_ms: null }), {});
-  assert.ok(ids(viaCurl).includes("bot_wall_blocked"));
-  assert.ok(ids(viaCurl).includes("fetched_via_fallback"));
-  assert.equal(viaCurl.find((x) => x[0] === "bot_wall_blocked")[1], "captcha page (HTTP 403); the page loaded via curl");
-  assert.equal(viaCurl.find((x) => x[0] === "fetched_via_fallback")[1], "loaded via curl after the normal request got HTTP 403");
+  // A wall the fallback got past is information only: the tool can't tell whether verified Googlebot is let through.
+  assert.ok(!ids(viaCurl).includes("bot_wall_blocked"));
+  assert.equal(viaCurl.find((x) => x[0] === "fetched_via_fallback")[1], "loaded via curl after the normal request got captcha page (HTTP 403)");
+  const noWall = pageIssues(pg({ fetchedVia: "curl", directStatus: 403 }, { response_ms: null }), {});
+  assert.equal(noWall.find((x) => x[0] === "fetched_via_fallback")[1], "loaded via curl after the normal request got HTTP 403");
   // A browser-fetched page with a (meaningless) response time still skips the speed checks.
   const viaBrowser = ids(pageIssues(pg({ fetchedVia: "browser", directStatus: 0 }, { response_ms: 6000 }), {}));
   assert.ok(viaBrowser.includes("fetched_via_fallback") && !viaBrowser.includes("very_slow") && !viaBrowser.includes("slow_page"));

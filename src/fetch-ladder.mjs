@@ -10,6 +10,7 @@
 // firewall block pages. curl, the browser and sleeping are injected, so tests need no network.
 import { spawn } from "node:child_process";
 
+export const AUDITOR_UA = "Mozilla/5.0 (compatible; SEOAuditor/1.0; +local)"; // the default crawl user agent (db.mjs)
 export const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
 export const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 export const REFUSED = new Set([401, 403, 429, 503]);
@@ -100,7 +101,8 @@ export function curlConfig(headers) {
   const q = (s) => `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return Object.entries(headers || {}).map(([k, v]) => `header = ${q(`${k}: ${v}`)}\n`).join("");
 }
-export const curlArgs = (url, { ua = BROWSER_UA, timeoutS = 20 } = {}) => ["-s", "-i", "--compressed", "-m", String(timeoutS), "-A", ua,
+// The fallbacks keep the crawl's own user agent: a refused crawler doesn't come back disguised as a browser.
+export const curlArgs = (url, { ua = AUDITOR_UA, timeoutS = 20 } = {}) => ["-s", "-i", "--compressed", "-m", String(timeoutS), "-A", ua,
   "-H", `Accept: ${ACCEPT}`, "-H", "Accept-Language: en-AU,en;q=0.9", "-K", "-", url];
 
 /** curl -i output → { status, headers, type, body, wallBody, location }. Skips 1xx and proxy CONNECT blocks; the body
@@ -127,13 +129,13 @@ export function parseCurlOutput(buf, maxBytes = MAX_BODY) {
 
 /** One request with curl (no redirects followed: the ladder follows them, checking robots.txt and where headers may
  *  go). Returns parseCurlOutput's fields plus ms, and truncated when the body passed maxBytes. */
-export function curlFetch(url, { headers = null, timeoutS = 20, maxBytes = MAX_BODY, spawnFn = spawn } = {}) {
+export function curlFetch(url, { headers = null, ua = AUDITOR_UA, timeoutS = 20, maxBytes = MAX_BODY, spawnFn = spawn } = {}) {
   return new Promise((resolve) => {
     const t0 = Date.now(), chunks = [];
     let n = 0, truncated = false, settled = false, child, killer;
     const finish = (out) => { if (settled) return; settled = true; clearTimeout(killer); resolve({ ...out, ms: Date.now() - t0, ...(truncated ? { truncated: true } : {}) }); };
     const none = { status: 0, headers: new Headers(), type: "", body: "", wallBody: "", location: null, error: "curl not available" };
-    try { child = spawnFn("curl", curlArgs(url, { timeoutS }), { windowsHide: true }); } catch { return finish(none); }
+    try { child = spawnFn("curl", curlArgs(url, { ua, timeoutS }), { windowsHide: true }); } catch { return finish(none); }
     killer = setTimeout(() => child.kill(), (timeoutS + 5) * 1000);
     child.on("error", () => finish(none));
     child.stdout.on("data", (b) => { if (truncated) return; chunks.push(b); n += b.length; if (n > maxBytes + 65536) { truncated = true; child.kill(); } });
@@ -172,9 +174,9 @@ export function browserAccess(headers, url) {
  *  { status, headers, type, body, wallBody, finalUrl, redirect, ms }. Images, media and fonts aren't downloaded;
  *  same-site URLs robots.txt disallows (blocked(url) → true) are never requested, redirects included. A check page
  *  ("Just a moment…") gets up to settleMs to reload itself, as it does in any browser; nothing is clicked or solved. */
-export async function browserFetch(browser, url, { headers = null, blocked = () => false, timeout = 30000, settleMs = 8000 } = {}) {
+export async function browserFetch(browser, url, { headers = null, ua = AUDITOR_UA, blocked = () => false, timeout = 30000, settleMs = 8000 } = {}) {
   const t0 = Date.now(), access = browserAccess(headers, url);
-  const context = await browser.newContext({ userAgent: BROWSER_UA, locale: "en-AU", ...(access.httpCredentials ? { httpCredentials: access.httpCredentials } : {}) });
+  const context = await browser.newContext({ userAgent: ua, locale: "en-AU", ...(access.httpCredentials ? { httpCredentials: access.httpCredentials } : {}) });
   try {
     if (access.cookies.length) await context.addCookies(access.cookies);
     const page = await context.newPage();
