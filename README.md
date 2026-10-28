@@ -55,6 +55,22 @@ Needs Node.js 22 or newer. After copying the folder to another PC, run `npm inst
 Paid requests run only when you press their button, and stop at the monthly budget in **App settings**
 (default $2).
 
+### Pages that refuse the crawler, and your own site's access
+
+- **Pages that refuse the crawler** (project setting `blockedFallback`, default *curl, then a real browser*): a page
+  that answers 401/403/503, no answer, or a bot challenge (Cloudflare, Akamai, captcha…) is read again with curl,
+  then in Chrome (at most 50 pages per audit). A 429, or a 503 with Retry-After, is waited out instead (up to 60 s,
+  3 minutes per audit), retried once, and the crawl drops to fewer parallel requests; it is never escalated. robots.txt
+  is obeyed by every step; nothing is disguised beyond a normal browser user agent, and no challenge is solved. *Off*
+  keeps the plain fetch only. Checks: `bot_wall_blocked`, `fetched_via_fallback`, `crawl_rate_limited`. Pages read
+  through a fallback have no response time (speed checks skip them) and aren't JavaScript-rendered.
+- **Request headers (own site)** (`requestHeaders`, up to 10): e.g. `Authorization: Basic …` for a staging site or a
+  bypass cookie (`Cookie: name=value`) your firewall issued. Sent only to the project's own hosts (never to external
+  links or other hosts, also not after a redirect) on page, robots.txt and own-file requests. The browser fallback
+  sends cookies and Basic authentication only. Values are stored in the local database, outside the settings; the
+  app never shows them again, never logs them, and keeps them out of audits and exports. Host, Content-Length,
+  Connection, User-Agent, Sec-*, Proxy-* and forwarding headers can't be set.
+
 ## Link building (merged Backlink Verifier, 2026-10-22)
 
 The sidebar section **Link building** is the former Backlink Verifier app, now inside SEO Auditor:

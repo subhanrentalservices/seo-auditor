@@ -23,10 +23,12 @@ import { pageSignals, signalSiteIssues } from "./page-signals.mjs";
 import { videoUrlsOf, videoFileIssues } from "./video-checks.mjs";
 import { CTA, ctaFoldIssues } from "./fold-check.mjs";
 import { brandTerms } from "./trends.mjs";
+import { createLadder, curlFetch, browserFetch, lazyBrowser, ladderSiteIssues, readCapped, REFUSED, BROWSER_UA } from "./fetch-ladder.mjs";
+import { requestHeaderValues, headersFor, redact } from "./request-headers.mjs";
 export { rawRenderedDiff };
 
-// Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser.
-const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
+// Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser (BROWSER_UA,
+// fetch-ladder.mjs), and crawled pages go through the fetch ladder.
 const running = new Map(); // auditId -> { stop: bool }
 export const isRunning = (id) => running.has(id);
 export const stopAudit = (id) => { const r = running.get(id); if (r) r.stop = true; };
@@ -66,16 +68,19 @@ export function robotsChangeIssues(projectId, auditId, status, body, origin) {
   return robotsDiff(prev.status === 200 ? prev.body : "", status === 200 ? body : "", pages, origin, prev.id);
 }
 
-async function fetchOnce(url, ua, method = "GET", timeout = 20000) {
+/** extra: the project's request headers, only ever passed for its own hosts (request-headers.mjs). */
+async function fetchOnce(url, ua, method = "GET", timeout = 20000, extra = null) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeout);
   const t0 = Date.now();
   try {
-    const res = await fetch(url, { method, redirect: "manual", signal: ctl.signal, headers: { "User-Agent": ua, Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "en;q=0.9" } });
+    const res = await fetch(url, { method, redirect: "manual", signal: ctl.signal, headers: { "User-Agent": ua, Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "en;q=0.9", ...extra } });
     const ttfb = Date.now() - t0; // server response time = time to headers, not download
     const type = res.headers.get("content-type") || "";
     const body = method === "GET" && res.status < 300 && /html|xml|text/.test(type) ? await res.text() : "";
-    return { status: res.status, headers: res.headers, type, body, ms: ttfb, location: res.headers.get("location") };
+    // A refused answer keeps the start of its page, only to recognise a bot challenge (botWall); it isn't the page.
+    const wallBody = method === "GET" && REFUSED.has(res.status) && /html|xml|text/.test(type) ? await readCapped(res).catch(() => "") : "";
+    return { status: res.status, headers: res.headers, type, body, wallBody, ms: ttfb, location: res.headers.get("location") };
   } catch (e) {
     return { status: 0, headers: new Headers(), type: "", body: "", ms: Date.now() - t0, error: e.name === "AbortError" ? "timeout" : e.message };
   } finally { clearTimeout(t); }
@@ -91,10 +96,11 @@ function curlStatus(url) {
   });
 }
 
-/** Follows redirects manually (max 10) so chains and loops are visible. */
-async function fetchFollow(url, ua) {
+/** Follows redirects manually (max 10) so chains and loops are visible. extraFor(url): request headers for that hop
+ *  (null for other hosts, so a redirect never carries them off the site). */
+async function fetchFollow(url, ua, extraFor = () => null) {
   const seen = [url];
-  let r = await fetchOnce(url, ua);
+  let r = await fetchOnce(url, ua, "GET", 20000, extraFor(url));
   const firstStatus = r.status;
   let total = r.ms;
   while (r.status >= 300 && r.status < 400 && r.location && seen.length <= 10) {
@@ -102,7 +108,7 @@ async function fetchFollow(url, ua) {
     if (!next) break;
     if (seen.includes(next)) return { ...r, finalUrl: next, redirect: { hops: seen.length, to: next, firstStatus, loop: true }, ms: total };
     seen.push(next);
-    r = await fetchOnce(next, ua);
+    r = await fetchOnce(next, ua, "GET", 20000, extraFor(next));
     total += r.ms;
   }
   const redirect = seen.length > 1 ? { hops: seen.length - 1, to: seen.at(-1), firstStatus, finalStatus: r.status } : null;
@@ -376,12 +382,15 @@ async function browserStatus(browser, url) {
   } catch { return 0; } finally { await page.close(); }
 }
 
+/** Runs fn over items with n workers; n may be a function, so the crawl can slow down mid-batch (fetch ladder). */
 async function pool(n, items, fn, shouldStop) {
   let i = 0;
-  await Promise.all(Array.from({ length: n }, async () => { while (i < items.length && !shouldStop()) { const k = i++; await fn(items[k], k); } }));
+  const width = typeof n === "function" ? n : () => n;
+  await Promise.all(Array.from({ length: width() }, async (_, w) => { while (i < items.length && !shouldStop() && w < width()) { const k = i++; await fn(items[k], k); } }));
 }
 
-export async function runAudit(auditId, project, settings, onProgress = () => {}) {
+/** deps: test seams for the fetch ladder's curl, browser and sleep (fetch-ladder.mjs). */
+export async function runAudit(auditId, project, settings, onProgress = () => {}, deps = {}) {
   const ctl = { stop: false };
   running.set(auditId, ctl);
   const ua = settings.userAgent;
@@ -390,24 +399,33 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
   const siteHost = hostKey(new URL(start).hostname);
   const inScope = (u) => { try { const h = hostKey(new URL(u).hostname); return h === siteHost || (settings.includeSubdomains && h.endsWith("." + siteHost)); } catch { return false; } };
   run("UPDATE audits SET status='running', started_at=datetime('now'), settings=? WHERE id=?", JSON.stringify(settings), auditId);
+  // The project's request headers: values stay out of settings and audit rows, and go to its own hosts only.
+  const own = requestHeaderValues(project.id), extraFor = headersFor(own, inScope);
 
-  let browser = null;
+  let browser = null, fallbackBrowser = null;
   try {
-    const robotsRes = await fetchFollow(origin + "/robots.txt", ua);
+    const robotsRes = await fetchFollow(origin + "/robots.txt", ua, extraFor);
     const robotsTxt = robotsRes.status === 200 ? robotsRes.body : "";
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
     saveRobots(auditId, robotsRes.status, robotsTxt);
     // robots.txt of the hosts rendered pages load files from (same site only; up to 10 hosts, fetched once each).
     const robotsByOrigin = new Map([[origin, Promise.resolve(robotsTxt ? robots : null)]]);
     const robotsFor = (o) => {
-      if (!robotsByOrigin.has(o) && robotsByOrigin.size < 10) robotsByOrigin.set(o, fetchOnce(o + "/robots.txt", ua, "GET", 10000).then((x) => (x.status === 200 && x.body ? robotsParser(o + "/robots.txt", x.body) : null)));
+      if (!robotsByOrigin.has(o) && robotsByOrigin.size < 10) robotsByOrigin.set(o, fetchOnce(o + "/robots.txt", ua, "GET", 10000, extraFor(o + "/robots.txt")).then((x) => (x.status === 200 && x.body ? robotsParser(o + "/robots.txt", x.body) : null)));
       return robotsByOrigin.get(o) || Promise.resolve(null);
     };
     let home = null; // the start page's raw HTML, for the favicon and script checks
     const sitemap = await loadSitemaps(origin, robotsTxt, ua, { normalize });
     saveLastmods(auditId, sitemap.lastmodOf); // the next audit checks them against page changes (sitemap_lastmod_inaccurate)
-    const llms = await fetchOnce(origin + "/llms.txt", ua, "GET");
+    const llms = await fetchOnce(origin + "/llms.txt", ua, "GET", 20000, extraFor(origin + "/llms.txt"));
     if (settings.renderJs) { const { launchChromium } = await import("./browser.mjs"); browser = await launchChromium(); }
+    // Pages that refuse the normal request: polite retry, curl, then a real browser (setting blockedFallback). Every
+    // step obeys robots.txt exactly like the crawl itself.
+    const robotsBlocked = (u) => Boolean(settings.respectRobots && robotsTxt && robots.isAllowed(u, "SEOAuditor") === false && robots.isAllowed(u, "*") === false);
+    fallbackBrowser = lazyBrowser(browser, async () => (await import("./browser.mjs")).launchChromium());
+    const ladder = createLadder({ mode: settings.blockedFallback, concurrency: settings.concurrency, inScope, blocked: robotsBlocked, headersFor: extraFor,
+      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor), curl: deps.curl || curlFetch,
+      browser: deps.browser || (async (u, o) => browserFetch(await fallbackBrowser.get(), u, { ...o, blocked: (x) => inScope(x) && robotsBlocked(x) })) });
 
     const seen = new Map([[start, 0]]);
     const queue = [start];
@@ -422,17 +440,17 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
 
     while (queue.length && !ctl.stop) {
       const batch = queue.splice(0, Math.max(settings.concurrency * 4, 20));
-      await pool(settings.concurrency, batch, async (url) => {
+      await pool(ladder.parallel, batch, async (url) => {
         if (settings.maxPages && started >= settings.maxPages) return;
         started++;
         const depth = seen.get(url);
-        const blocked = settings.respectRobots && robotsTxt && robots.isAllowed(url, "SEOAuditor") === false && robots.isAllowed(url, "*") === false;
-        if (blocked) { insPage.run(auditId, url, url, 0, depth, "", 0, 0, "", "", "", null, 0, sitemap.urls.has(url) ? 1 : 0, 0, 0, 0, JSON.stringify({ blockedByRobots: true })); crawled++; return; }
-        const r = await fetchFollow(url, ua);
+        if (robotsBlocked(url)) { insPage.run(auditId, url, url, 0, depth, "", 0, 0, "", "", "", null, 0, sitemap.urls.has(url) ? 1 : 0, 0, 0, 0, JSON.stringify({ blockedByRobots: true })); crawled++; return; }
+        const r = await ladder.fetch(url);
         const final = r.finalUrl;
+        const direct = r.via === "fetch" || r.via === "retry"; // a fallback's HTML isn't re-rendered: the renderer would meet the wall again
         let html = r.body;
         let jsWordsRaw = null, raw = null, rawParse = null, rendered = null;
-        if (browser && r.status === 200 && /html/.test(r.type)) {
+        if (browser && direct && r.status === 200 && /html/.test(r.type)) {
           rawParse = parseHtml(html, final);
           rendered = await renderPage(browser, final, ua);
           // After a JavaScript redirect the rendered DOM is another URL's page (crawled on its own): keep the raw HTML.
@@ -440,7 +458,11 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         }
         const isHtml = /html/.test(r.type) && r.status === 200;
         const p = isHtml ? parseHtml(html, final) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], res: [], words: 0, text: "", data: {} };
-        const d = { ...p.data, redirect: r.redirect || undefined, error: r.error };
+        const d = { ...p.data, redirect: r.redirect || undefined, error: r.error ? redact(r.error, own) : undefined, fetchedVia: r.via };
+        if (r.botWall) d.botWall = { ...r.botWall, status: r.directStatus ?? r.status };
+        if (r.tried?.length) d.fallbackTried = r.tried;
+        if (!direct) { d.directStatus = r.directStatus; d.fallbackMs = r.fallbackMs; } // response_ms stays empty: not the server's answer to a crawler
+        if (r.rateLimited) d.rateLimited = true;
         if (isHtml) {
           const hc = headClosedEarly(r.body); // always the raw source: a rendered DOM has already been repaired
           if (hc) d.headClosedEarly = hc;
@@ -453,6 +475,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
           if (to && inScope(to) && !seen.has(to)) { seen.set(to, (depth ?? 0) + 1); queue.push(to); }
           if (url === start) home = { html: r.body, url: final, dom: html }; // dom: the rendered HTML when rendering is on
         }
+        // Indexing directives in headers count from a fallback too: the server sends them with the page itself.
         applyHeaderRobots(d, r.headers.get("x-robots-tag") || ""); // only googlebot: or unscoped header lines count
         const linkCanon = linkHeaderCanonical(r.headers.get("link"), final);
         if (linkCanon) d.canonicalHeader = linkCanon;
@@ -495,18 +518,18 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // ---- post-crawl: link graph, resource checks, site rules ----
     run(`UPDATE pages SET inlinks = (SELECT COUNT(DISTINCT l.from_url) FROM links l WHERE l.audit_id=pages.audit_id AND l.kind='a' AND l.internal=1 AND l.to_url IN (pages.url, pages.final_url) AND l.from_url <> pages.url) WHERE audit_id=?`, auditId);
     const statusOf = new Map(all("SELECT url, final_url, status FROM pages WHERE audit_id=?", auditId).flatMap((p) => [[p.url, p.status], [p.final_url, p.status]]));
-    const checkStatus = async (set, limit) => {
+    const checkStatus = async (set, limit, width = settings.concurrency) => {
       const out = new Map(); const list = [...set].filter((u) => !statusOf.has(u)).slice(0, limit);
-      await pool(settings.concurrency, list, async (u) => {
-        let r = await fetchOnce(u, ua, "HEAD", 15000);
-        if (r.status === 0 || r.status === 405 || r.status >= 400) r = await fetchOnce(u, BROWSER_UA, "GET", 15000);
+      await pool(width, list, async (u) => {
+        let r = await fetchOnce(u, ua, "HEAD", 15000, extraFor(u));
+        if (r.status === 0 || r.status === 405 || r.status >= 400) r = await fetchOnce(u, BROWSER_UA, "GET", 15000, extraFor(u));
         if ([0, 401, 403, 429].includes(r.status)) r = { status: (await curlStatus(u)) || r.status };
         out.set(u, r.status);
       }, () => ctl.stop);
       return out;
     };
-    const imgStatus = await checkStatus(imgSet, 20000);
-    const resStatus = await checkStatus(resSet, 5000);
+    const imgStatus = await checkStatus(imgSet, 20000, ladder.parallel); // own files: at the crawl's (possibly lowered) pace
+    const resStatus = await checkStatus(resSet, 5000, ladder.parallel);
     const extStatus = settings.checkExternalLinks ? await checkStatus(extSet, 5000) : new Map();
     const refused = [...extStatus].filter(([, s]) => [401, 403, 429].includes(s)).map(([u]) => u).slice(0, 40);
     if (refused.length && !ctl.stop) {
@@ -537,7 +560,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // Re-time slow pages one at a time: parallel crawling on small hosts inflates response times.
     for (const p of all("SELECT url, final_url, response_ms FROM pages WHERE audit_id=? AND response_ms > 1500 ORDER BY response_ms DESC LIMIT 50", auditId)) {
       if (ctl.stop) break;
-      const r = await fetchOnce(p.final_url || p.url, ua, "GET");
+      const r = await fetchOnce(p.final_url || p.url, ua, "GET", 20000, extraFor(p.final_url || p.url));
       if (r.status === 200 && r.ms < p.response_ms) run("UPDATE pages SET response_ms=? WHERE audit_id=? AND url=?", r.ms, auditId, p.url);
     }
     const pages = all("SELECT * FROM pages WHERE audit_id=?", auditId).map((p) => ({ ...p, data: JSON.parse(p.data) }));
@@ -583,6 +606,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       } catch { /* no browser on this computer: not checked */ } finally { if (b && b !== browser) await b.close().catch(() => {}); }
     }
     const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
+    // Pages still behind a bot wall: reported as bot_wall_blocked, not as broken links or bad sitemap URLs.
+    const walled = new Set(pages.filter((p) => p.data.botWall && p.status >= 400).flatMap((p) => [p.url, p.final_url]));
     const lm = lastmodUniformity(sitemap.lastmods || []);
     // A shared date is honest after a real site-wide edit: check those pages' text against the audit before that date.
     if (lm && lm.share >= 0.6) lm.check = lastmodChanged(project.id, auditId, lm.date, sitemap.lastmodOf);
@@ -594,13 +619,13 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       if (p.status === 200 && p.indexable && p.inlinks === 1) raise("single_inlink", p.url);
       if (p.in_sitemap && p.inlinks === 0 && p.url !== start) raise("sitemap_orphan", p.url);
       if (p.in_sitemap && p.data.blockedByRobots) raise("sitemap_blocked", p.url);
-      if (p.in_sitemap && (p.status !== 200 || p.data.redirect)) raise("sitemap_bad_url", p.url, p.data.redirect ? "redirects" : `HTTP ${p.status}`);
+      if (p.in_sitemap && (p.status !== 200 || p.data.redirect) && !walled.has(p.url)) raise("sitemap_bad_url", p.url, p.data.redirect ? "redirects" : `HTTP ${p.status}`);
       if (p.canonical && p.canonical !== p.url) { const s = sOf(p.canonical); if (s && s !== 200) raise("canonical_broken", p.url, `${p.canonical} → HTTP ${s}`); }
     }
     for (const l of db.prepare("SELECT DISTINCT from_url,to_url,internal,kind FROM links WHERE audit_id=?").iterate(auditId)) { // streamed: large sites have millions of links
       if (l.kind === "a" && l.internal && redirOf.has(l.to_url)) raise("links_to_redirect", l.from_url, `${l.to_url} → ${redirOf.get(l.to_url)}`);
       const s = sOf(l.to_url);
-      if (!s || s < 400) continue;
+      if (!s || s < 400 || walled.has(l.to_url)) continue;
       if (l.kind === "img" && l.internal) raise("broken_internal_image", l.from_url, `${l.to_url} → ${s}`);
       else if (l.kind === "res") { if (![401, 403, 429].includes(s)) raise("broken_internal_resource", l.from_url, `${l.to_url} → ${s}`); } // still refused after the retries: a bot wall, not a broken file
       else if (l.kind === "a" && l.internal) raise("broken_internal_link", l.from_url, `${l.to_url} → ${s}`);
@@ -635,7 +660,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     const signals = signalSiteIssues({ auditId, projectId: project.id, pages, start, cluster, brandTerms: brandTerms(project, settings), robots: robotsTxt ? robots : null,
       robotsTxt, origin, allow: String(settings.spamAllowTerms || "").split(",").map((t) => t.trim()).filter(Boolean) });
-    for (const [id, u, det] of [...signals, ...videoFiles, ...fold]) raise(id, u, det);
+    for (const [id, u, det] of [...signals, ...videoFiles, ...fold, ...ladderSiteIssues(ladder.stats, start)]) raise(id, u, det);
     const aLinks = db.prepare("SELECT DISTINCT from_url,to_url,internal,nofollow,rel FROM links WHERE audit_id=? AND kind='a'").iterate(auditId);
     for (const [id, u, det] of [...linkSiteIssues(aLinks, { pages, redirOf, inScope, robots: robotsTxt ? robots : null, auditDate: ctx.auditDate }), ...urlVariantIssues(pages)]) raise(id, u, det);
     db.exec("COMMIT");
@@ -651,16 +676,18 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const blocks = get("SELECT COUNT(*) n FROM issues WHERE audit_id=? AND check_id='ai_search_bot_blocked'", auditId).n;
     const aiScore = aiReadiness(aiRows, pages.filter((p) => p.indexable).length, blocks);
     const siteInfo = { robotsTxt: Boolean(robotsTxt), sitemapUrls: sitemap.urls.size, sitemapDeclared: sitemap.declared, llmsTxt: llms.status === 200,
-      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: Boolean(settings.renderJs) };
+      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: Boolean(settings.renderJs),
+      fetchLadder: { via: ladder.stats.via, walls: ladder.stats.walls, slowDowns: ladder.stats.slowDowns, parallel: ladder.stats.parallel } };
     run("UPDATE audits SET ai_readiness=?, site_info=? WHERE id=?", aiScore, JSON.stringify(siteInfo), auditId);
     run("UPDATE audits SET status=?, finished_at=datetime('now'), pages_crawled=?, pages_queued=0, health=?, errors=?, warnings=?, notices=?, message=? WHERE id=?",
       ctl.stop ? "stopped" : "done", pages.length, health, count("error"), count("warning"), count("notice"), ctl.stop ? "Stopped by user" : null, auditId);
     return { pages: pages.length, health };
   } catch (e) {
     try { db.exec("ROLLBACK"); } catch {}
-    run("UPDATE audits SET status='failed', finished_at=datetime('now'), message=? WHERE id=?", String(e.stack || e).slice(0, 500), auditId);
+    run("UPDATE audits SET status='failed', finished_at=datetime('now'), message=? WHERE id=?", redact(String(e.stack || e), own).slice(0, 500), auditId);
     throw e;
   } finally {
+    await fallbackBrowser?.close(); // only when the ladder launched its own
     if (browser) await browser.close().catch(() => {});
     running.delete(auditId);
   }

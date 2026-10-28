@@ -192,7 +192,7 @@ export async function pageDrawer(ctx, aid, url) {
         ...kv("Indexable", p.indexable ? "Yes" : `No${x.noindexSource ? " — noindex via " + x.noindexSource : p.canonical && p.canonical !== p.url ? " — canonical points elsewhere" : ""}`),
         ...kv("Canonical", p.canonical || "none"), ...kv("H1", p.h1 || "none"),
         ...kv("Words", num(p.words)), ...kv("Text/HTML", `${p.text_ratio}%`), ...kv("HTML size", `${num(Math.round(p.bytes / 1024))} KB`),
-        ...kv("Server response", `${num(p.response_ms)} ms`), ...kv("Click depth", p.depth ?? "not linked"), ...kv("In sitemap", p.in_sitemap ? "Yes" : "No"),
+        ...kv("Server response", ["curl", "browser"].includes(x.fetchedVia) ? `not measured: loaded via ${x.fetchedVia} after HTTP ${x.directStatus || "no answer"}` : `${num(p.response_ms)} ms${x.fetchedVia === "retry" ? " (retried after a slow-down answer)" : ""}`),...kv("Click depth", p.depth ?? "not linked"), ...kv("In sitemap", p.in_sitemap ? "Yes" : "No"),
         ...kv("Schema types", (x.schemaTypes || []).join(", ") || "none"), ...kv("Language", x.lang || "–"),
         ...kv("Open Graph", x.og ? "✓" : "missing"), ...kv("Author / date", `${x.author ? "author ✓" : "no author"} · ${x.dated ? "dated ✓" : "no date"}`))),
       d.gsc ? h("div", { class: "card" }, h("h3", { style: { marginBottom: "8px" } }, `Google Search (${d.gsc.start_date} → ${d.gsc.end_date})`),
@@ -273,6 +273,7 @@ VIEWS.settings = async (ctx) => {
     includeSubdomains: h("input", { type: "checkbox", checked: s.includeSubdomains }), checkExternalLinks: h("input", { type: "checkbox", checked: s.checkExternalLinks }),
     auditBlockedUrls: h("input", { type: "checkbox", checked: s.auditBlockedUrls === true }),
     siteProbes: h("input", { type: "checkbox", checked: s.siteProbes === true }),
+    blockedFallback: h("select", {}, [["browser", "curl, then a real browser"], ["curl", "curl only"], ["off", "Off"]].map(([v, l]) => h("option", { value: v, selected: (s.blockedFallback || "browser") === v }, l))),
     schedule: h("select", {}, [["off", "Off"], ["daily", "Daily"], ["weekly", "Weekly"]].map(([v, l]) => h("option", { value: v, selected: s.schedule === v }, l))),
     cwvPages: h("input", { type: "number", min: 0, max: 50, value: s.cwvPages }), gscProperty: h("input", { type: "text", value: s.gscProperty, placeholder: "sc-domain:example.com or https://example.com/" }),
     localFolder: h("input", { type: "text", value: s.localFolder || "", placeholder: "C:\\path\\to\\site (optional)" }),
@@ -286,10 +287,23 @@ VIEWS.settings = async (ctx) => {
     napPhone: h("input", { type: "text", value: s.napPhone || "", placeholder: "e.g. 03 9000 0000" }),
   };
   const row = (label, el, hint) => [h("label", {}, label), h("div", {}, el, hint ? h("div", { class: "small muted" }, hint) : null)];
+  // Own-site request headers: the API returns names only; an empty value keeps the saved one.
+  const hdrRows = h("div", {});
+  const addHdr = (name = "", saved = false) => {
+    if (hdrRows.children.length >= 10) return toast("At most 10 request headers");
+    const n = h("input", { type: "text", value: name, placeholder: "Name, e.g. Authorization or Cookie", style: { width: "38%" } });
+    const v = h("input", { type: "password", autocomplete: "new-password", placeholder: saved ? "Saved (hidden): empty keeps it" : "Value", style: { width: "42%" } });
+    const r = h("div", { class: "row", style: { marginBottom: "4px" } }, n, v, h("button", { type: "button", class: "btn", onclick: () => r.remove() }, "Remove"));
+    r.read = () => ({ name: n.value.trim(), value: v.value });
+    hdrRows.append(r);
+  };
+  for (const x of s.requestHeaders || []) addHdr(x.name, true);
+  const headersEl = h("div", {}, hdrRows, h("button", { type: "button", class: "btn", onclick: () => addHdr() }, "Add header"));
   const save = async (e) => {
     e.preventDefault();
     const settings = {}; for (const k of Object.keys(s)) if (f[k]) settings[k] = f[k].type === "checkbox" ? f[k].checked : f[k].type === "number" ? Number(f[k].value) : f[k].value;
     if (f.localFolder.value || s.localFolder) settings.localFolder = f.localFolder.value;
+    settings.requestHeaders = [...hdrRows.children].map((r) => r.read());
     try { await api(`/api/projects/${p.id}`, { method: "PUT", body: { name: f.name.value, start_url: f.start_url.value, settings } }); toast("Saved"); ctx.app.refresh(); } catch (err) { toast(err.message); }
   };
   return [h("form", { class: "card", onsubmit: save }, h("h2", {}, "Project settings"), h("div", { class: "form" },
@@ -298,6 +312,8 @@ VIEWS.settings = async (ctx) => {
     ...row("Render JavaScript", f.renderJs, "Uses headless Chrome; slower. Turn on for React/Vue sites."),
     ...row("Respect robots.txt", f.respectRobots), ...row("Include subdomains", f.includeSubdomains), ...row("Check external links", f.checkExternalLinks),
     ...row("Check robots-blocked URLs", f.auditBlockedUrls, "Fetches up to 50 robots.txt-blocked URLs your site links to, once each, to find a noindex Google can't see. Only for sites you own (off by default)."),
+    ...row("Pages that refuse the crawler", f.blockedFallback, "When a page answers 401/403/503 or a bot challenge, it is read again with curl, then in a real browser (up to 50 pages per audit). robots.txt is still obeyed, nothing is disguised or solved, and a 429 \"slow down\" is waited out, never bypassed."),
+    ...row("Request headers (own site)", headersEl, "Sent only to this site's own hosts, never to other sites: e.g. a staging password (Authorization) or a bypass cookie your firewall issued. Values stay on this computer and are never shown again. The browser fallback sends only cookies and Basic authentication."),
     ...row("Extra site probes", f.siteProbes, "Up to 60 requests after the crawl, one at a time: search result pages, what Googlebot and phones get, staging copies, 304 and compression, exposed .env/.git files, certificate expiry, language redirects. Only for sites you own (off by default)."),
     ...row("Scheduled audit", f.schedule, "Runs while the app is open (it starts with Windows if enabled in README)."),
     ...row("Core Web Vitals pages", f.cwvPages, "Measured in headless Chrome after each audit (0 = off)"),

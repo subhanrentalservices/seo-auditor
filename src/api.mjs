@@ -3,6 +3,8 @@ import { all, get, run, projectSettings, DEFAULT_SETTINGS } from "./db.mjs";
 import { CHECKS, CRAWL } from "./checks.mjs";
 import "./ai-checks.mjs";
 import { startAudit, stop, activeAudit } from "./runner.mjs";
+import { cleanRequestHeaders, saveRequestHeaders, maskHeaders } from "./request-headers.mjs";
+import { FALLBACK_MODES } from "./fetch-ladder.mjs";
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const SEV_ORDER = { error: 0, warning: 1, notice: 2 };
@@ -15,52 +17,69 @@ function cleanUrl(u) {
   return x.href;
 }
 
-/** Keeps only known settings with the right types. */
+/** Keeps only known settings with the right types. requestHeaders comes back with its values (null = keep the saved
+ *  one): storeHeaders moves them to their own table before the settings are saved. */
 function cleanSettings(input = {}) {
   const out = {};
   for (const [k, def] of Object.entries(DEFAULT_SETTINGS)) {
     if (!(k in input)) continue;
     const v = input[k];
+    if (Array.isArray(def)) continue; // requestHeaders, below
     if (typeof def === "number") { const n = Number(v); if (Number.isFinite(n) && n >= 0) out[k] = Math.floor(n); }
     else if (typeof def === "boolean") out[k] = Boolean(v);
     else out[k] = String(v ?? "").slice(0, k === "targetKeywords" ? 4000 : 500);
   }
   if (out.concurrency !== undefined) out.concurrency = Math.min(Math.max(out.concurrency, 1), 20);
   if (out.schedule !== undefined && !["off", "daily", "weekly"].includes(out.schedule)) out.schedule = "off";
+  if (out.blockedFallback !== undefined && !FALLBACK_MODES.includes(out.blockedFallback)) out.blockedFallback = DEFAULT_SETTINGS.blockedFallback;
+  if ("requestHeaders" in input) out.requestHeaders = cleanRequestHeaders(input.requestHeaders);
   return out;
 }
+
+/** Saves request header values in their own table; the settings keep only the names. */
+function storeHeaders(projectId, clean) {
+  if (clean.requestHeaders) clean.requestHeaders = saveRequestHeaders(projectId, clean.requestHeaders);
+  return clean;
+}
+
+/** Settings as the API shows them: request header names only, never values (old rows included). */
+const publicSettings = (s) => ({ ...s, requestHeaders: maskHeaders(s?.requestHeaders) });
 
 const project = (id) => get("SELECT * FROM projects WHERE id=?", Number(id)) || fail(404, "Project not found");
 const audit = (id) => get("SELECT * FROM audits WHERE id=?", Number(id)) || fail(404, "Audit not found");
 const previousAudit = (a) => get("SELECT * FROM audits WHERE project_id=? AND id<? AND status='done' ORDER BY id DESC LIMIT 1", a.project_id, a.id);
-const shapeAudit = (a) => a && { ...a, settings: JSON.parse(a.settings || "{}"), site_info: a.site_info ? JSON.parse(a.site_info) : null };
+const shapeAudit = (a) => a && { ...a, settings: publicSettings(JSON.parse(a.settings || "{}")), site_info: a.site_info ? JSON.parse(a.site_info) : null };
 
 export function listProjects() {
   return all("SELECT * FROM projects ORDER BY name").map((p) => {
     const last = get("SELECT * FROM audits WHERE project_id=? AND status='done' ORDER BY id DESC LIMIT 1", p.id);
     const prev = last && previousAudit(last);
-    return { ...p, settings: projectSettings(p), last: shapeAudit(last), healthDelta: last && prev ? last.health - prev.health : null, running: activeAudit(p.id) };
+    return { ...p, settings: publicSettings(projectSettings(p)), last: shapeAudit(last), healthDelta: last && prev ? last.health - prev.health : null, running: activeAudit(p.id) };
   });
 }
 
 export function createProject(body) {
   const start = cleanUrl(body.start_url);
   const name = String(body.name || new URL(start).hostname.replace(/^www\./, "")).slice(0, 100);
-  const id = Number(run("INSERT INTO projects (name, start_url, settings) VALUES (?, ?, ?)", name, start, JSON.stringify(cleanSettings(body.settings))).lastInsertRowid);
+  const { requestHeaders, ...settings } = cleanSettings(body.settings);
+  const missing = requestHeaders?.find((x) => x.value === null);
+  if (missing) fail(400, `Enter a value for the ${missing.name} header`);
+  const id = Number(run("INSERT INTO projects (name, start_url, settings) VALUES (?, ?, ?)", name, start, JSON.stringify(settings)).lastInsertRowid);
+  if (requestHeaders?.length) run("UPDATE projects SET settings=? WHERE id=?", JSON.stringify(storeHeaders(id, { ...settings, requestHeaders })), id);
   return getProject(id);
 }
 
 export function getProject(id) {
   const p = project(id);
   const history = all("SELECT id, status, started_at, finished_at, pages_crawled, health, ai_readiness, errors, warnings, notices, message FROM audits WHERE project_id=? ORDER BY id DESC LIMIT 60", p.id);
-  return { ...p, settings: projectSettings(p), history, running: activeAudit(p.id) };
+  return { ...p, settings: publicSettings(projectSettings(p)), history, running: activeAudit(p.id) };
 }
 
 export function updateProject(id, body) {
   const p = project(id);
   const name = body.name !== undefined ? String(body.name).slice(0, 100) : p.name;
   const start = body.start_url !== undefined ? cleanUrl(body.start_url) : p.start_url;
-  const settings = { ...JSON.parse(p.settings || "{}"), ...cleanSettings(body.settings) };
+  const settings = { ...JSON.parse(p.settings || "{}"), ...storeHeaders(p.id, cleanSettings(body.settings)) };
   run("UPDATE projects SET name=?, start_url=?, settings=? WHERE id=?", name, start, JSON.stringify(settings), p.id);
   return getProject(p.id);
 }

@@ -182,6 +182,10 @@ export const CHECKS = {
   title_quality: ["notice", "Keyword-list, repeated-brand or boilerplate title", "Google's title links doc: \"there's no reason to have the same words or phrases appear multiple times\" (keyword stuffing can make results look spammy), avoid \"repeated or boilerplate text in <title> elements\", and brand titles concisely. Flagged (heuristics): the brand twice or more, 4 or more segments split by | , or dashes, one word 3 or more times, or a leading/trailing part over 60% of the title shared by 10 or more pages. Google may rewrite such title links.", "Write each title as a short description of that page, with the brand once at most (usually at the end)."],
   video_not_main: ["notice", "Video may not count as the page's main content", "To be eligible for video features Google needs a dedicated watch page whose main purpose is to show one video; where the video is complementary to the text, the page can still show as a text result (video best practices). This page has VideoObject markup but its first video comes after half of the main text, or it embeds 3 or more videos (heuristics: Google's systems decide).", "If you want video results, give the video its own watch page (video near the top, title and description about the video) and point the VideoObject there; otherwise nothing is required."],
   video_thumbnail_unreachable: ["warning", "Video thumbnail or file can't be fetched", "Google's video best practices: a video needs a valid thumbnail at a stable URL that Googlebot can fetch, and Google must be able to fetch the video file for previews and key moments. This VideoObject's thumbnailUrl doesn't answer 200, or its contentUrl doesn't answer 200 with a video file type. Up to 20 URLs are checked per audit.", "Fix the thumbnailUrl / contentUrl in the VideoObject to stable URLs that answer 200 (an image and a video file); avoid expiring CDN links."],
+  // ---------------- Bot walls and slow-down answers (REQ-055 group 1, Oct 2026) ----------------
+  bot_wall_blocked: ["warning", "Pages answer the crawler with a bot challenge", "The site's own pages answered this tool's crawler with a bot challenge or firewall block page (e.g. Cloudflare \"Just a moment...\", an Akamai \"Access Denied\" with a reference number, a captcha). If the CDN or firewall challenges crawlers it doesn't know, Google's crawlers can be refused too unless they are allowlisted; a challenged page can't be crawled or indexed, and Search Console reports it as blocked (403) or as a server error. The detail says whether a fallback (curl or a real browser) got the page anyway.", "In the CDN or firewall, allowlist verified Googlebot (most CDNs have a \"verified bots\" setting) and this tool's user agent for your own audits, or lower the bot-protection level for crawlers. Then confirm with Search Console's URL Inspection live test that Google gets the real page."],
+  fetched_via_fallback: ["notice", "Pages that loaded only through a fallback (information)", "These pages refused the crawler's normal request (401, 403, 503, no answer or a challenge page) and were read through curl or a real browser instead. Their content was checked as usual; their response time and JavaScript rendering weren't, because the fallback's timing isn't the server's answer to a crawler.", "Usually the same fix as bot_wall_blocked: allowlist crawlers in the CDN or firewall. If the page also loads for Search Console's URL Inspection, Google can read it."],
+  crawl_rate_limited: ["notice", "The site asked the crawler to slow down (429/503)", "During the audit the server answered 429 Too Many Requests, or 503 with a Retry-After header. The crawler waited as long as asked (up to 60 s), retried each page once and lowered its parallel requests for the rest of the audit. Google reduces its crawl rate on 429 and 503 answers too, so steady slow-down answers can slow the crawling and indexing of new pages (Google crawl rate docs).", "If the limit is unintended, raise it for crawlers in the server, CDN or security plugin, or check the server has enough capacity. For this tool, lower Parallel requests in the project settings (2–3 on small shared hosting)."],
   cta_below_fold: ["notice", "Call to action below the first phone screen (conversion, not a Google ranking issue)", "On a 412×823 phone screen the first phone link, email link or call-to-action button of this home or money page starts below the first screen, and there is no sticky call bar. Visitors who are ready to act have to scroll to find how. A conversion and UX notice, not a Google ranking factor (Rio Ichikawa, \"A discussion of UX for SEO\", Search Off the Record 2024, anecdotal). Checked on up to 6 pages when a browser is available.", "Put the main action (call, book, get a quote) in the first screen on phones, e.g. a button under the H1 or a sticky call bar."],
 };
 
@@ -194,7 +198,8 @@ export const CRAWL = new Set(["http_4xx", "http_5xx", "broken_internal_link", "r
   "internal_search_indexable", "internal_search_echoed", "mobile_desktop_parity", "googlebot_ua_diff", "robots_txt_syntax", "robots_group_override", "staging_host_exposed",
   "login_redirect_hub", "sitemap_lastmod_inaccurate", "no_conditional_get", "no_compression", "tls_cert_expiring", "tls_cert_critical", "locale_redirect",
   "robots_blocked_noindex", "robots_blocked_linked", "sitemap_fetch_error", "sitemap_too_large", "render_resource_blocked", "render_js_error", "render_js_error_content",
-  "broken_internal_resource", "js_redirect", "sitemap_non_canonical", "internal_link_tracking_params", "url_variant_200", "crawl_trap_links"]);
+  "broken_internal_resource", "js_redirect", "sitemap_non_canonical", "internal_link_tracking_params", "url_variant_200", "crawl_trap_links",
+  "bot_wall_blocked", "fetched_via_fallback", "crawl_rate_limited"]);
 
 export const SEVERITY = (id) => CHECKS[id][0];
 
@@ -226,16 +231,25 @@ export function pageIssues(p, ctx) {
   const d = W(p);
   const add = (id, detail = "") => out.push([id, detail]);
   const isHtml = (p.content_type || "").includes("html");
-  if (p.status >= 500) add("http_5xx", `HTTP ${p.status}`);
-  else if (p.status >= 400) add("http_4xx", `HTTP ${p.status}`);
+  // Fetch ladder (fetch-ladder.mjs): a page still behind a bot wall is bot_wall_blocked, not a missing page or a
+  // server error; a page read through curl or the browser has no server response time of its own.
+  const direct = !d.fetchedVia || d.fetchedVia === "fetch" || d.fetchedVia === "retry";
+  if (d.botWall) {
+    const w = d.botWall, tried = d.fallbackTried?.length ? `still refused after ${d.fallbackTried.join(" and ")}` : "no fallback tried (setting or robots.txt)";
+    add("bot_wall_blocked", `${w.vendor === "unknown" ? "" : w.vendor + " "}${w.kind} page (HTTP ${w.status}); ${direct ? tried : `the page loaded via ${d.fetchedVia}`}`);
+  }
+  if (!direct) add("fetched_via_fallback", `loaded via ${d.fetchedVia} after the normal request got ${d.directStatus ? "HTTP " + d.directStatus : "no answer"}`);
+  const walled = d.botWall && p.status >= 400; // reported as bot_wall_blocked
+  if (!walled && p.status >= 500) add("http_5xx", `HTTP ${p.status}`);
+  else if (!walled && p.status >= 400) add("http_4xx", `HTTP ${p.status}`);
   if (d.redirect) {
     if (d.redirect.hops > 1 || d.redirect.loop) add("redirect_chain", d.redirect.loop ? "redirect loop" : `${d.redirect.hops} hops → ${d.redirect.to}`);
     if ([302, 303, 307].includes(d.redirect.firstStatus)) add("temporary_redirect", `${d.redirect.firstStatus} → ${d.redirect.to}`);
     else add("permanent_redirect", `${d.redirect.firstStatus} → ${d.redirect.to}`);
   }
   if (p.url.startsWith("http://") && ctx.siteIsHttps) add("http_page");
-  if (p.response_ms > 5000) add("very_slow", `${p.response_ms} ms`);
-  else if (p.response_ms > 1500) add("slow_page", `${p.response_ms} ms`);
+  if (direct && p.response_ms > 5000) add("very_slow", `${p.response_ms} ms`);
+  else if (direct && p.response_ms > 1500) add("slow_page", `${p.response_ms} ms`);
   if (d.blockedByRobots) add("blocked_by_robots");
   if (p.url.length > 115) add("url_too_long", `${p.url.length} chars`);
   if (p.status === 200 && d.unavailableAfter) { // header or meta, any content type (PDFs use the header)
