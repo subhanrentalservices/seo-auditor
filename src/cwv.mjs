@@ -84,11 +84,36 @@ export function medianRun(runs) {
     verdict, slowRuns: slow } };
 }
 
+// Long runs: one headless Chrome degrades after a few dozen Lighthouse runs ("An internal Chrome error occurred. Please
+// restart Chrome", missing lh:* performance marks), and every later page then fails. Chrome is restarted every
+// RESTART_EVERY pages, and after such an error the page is retried once in a fresh Chrome.
+export const RESTART_EVERY = 15;
+const CHROME_BROKEN = /internal Chrome error|performance mark has not been set|Target closed|ECONNREFUSED|Protocol error/i;
+
+/** Runs Lighthouse page by page in a Chrome it relaunches when needed. launch() → { port, kill() }; run(port, url). */
+export function chromeSession(launch, run, every = RESTART_EVERY) {
+  let chrome = null, used = 0;
+  const fresh = async () => { if (chrome) { try { await chrome.kill(); } catch { /* already gone */ } } chrome = await launch(); used = 0; };
+  return {
+    async measure(url) {
+      if (!chrome || used >= every) await fresh();
+      used++;
+      try { return await run(chrome.port, url); } catch (e) {
+        if (!CHROME_BROKEN.test(String(e?.message))) throw e;
+        await fresh(); used++;
+        return run(chrome.port, url);
+      }
+    },
+    async close() { if (chrome) { try { await chrome.kill(); } catch {} chrome = null; } },
+  };
+}
+
 export async function runCwv(auditId, project, settings, n = settings.cwvPages) {
   const urls = pickPages(auditId, n);
   if (!urls.length) return [];
   const { chromiumPath } = await import("./browser.mjs");
-  const chrome = await chromeLauncher.launch({ chromePath: await chromiumPath(), chromeFlags: ["--headless=new", "--no-first-run", "--disable-extensions"] });
+  const path = await chromiumPath();
+  const chrome = chromeSession(() => chromeLauncher.launch({ chromePath: path, chromeFlags: ["--headless=new", "--no-first-run", "--disable-extensions"] }), audit);
   const out = [];
   const save = (url, m, update) => run(update
     ? "UPDATE cwv SET lcp_ms=?, cls=?, tbt_ms=?, transfer_kb=?, fcp_ms=?, si_ms=?, perf=?, a11y=?, bp=?, seo=?, details=? WHERE audit_id=? AND url=?"
@@ -99,7 +124,7 @@ export async function runCwv(auditId, project, settings, n = settings.cwvPages) 
     for (const [i, url] of urls.entries()) {
       phase(project.id, auditId, `Lighthouse ${i + 1}/${urls.length}`);
       try {
-        const m = await audit(chrome.port, url);
+        const m = await chrome.measure(url);
         save(url, m);
         out.push({ url, ...m });
       } catch (e) {
@@ -112,14 +137,14 @@ export async function runCwv(auditId, project, settings, n = settings.cwvPages) 
       const k = out.findIndex((r) => r.url === url), runs = [out[k]];
       for (let j = 2; j <= RECHECK_RUNS; j++) {
         phase(project.id, auditId, `Re-checking slow page ${i + 1}/${targets.length} (run ${j}/${RECHECK_RUNS})`);
-        try { runs.push(await audit(chrome.port, url)); } catch (e) { console.error("lighthouse re-check", url, e.message); }
+        try { runs.push(await chrome.measure(url)); } catch (e) { console.error("lighthouse re-check", url, e.message); }
       }
       if (runs.length < 3) continue;
       const m = medianRun(runs);
       save(url, m, true);
       out[k] = { url, ...m };
     }
-  } finally { try { await chrome.kill(); } catch {} }
+  } finally { await chrome.close(); }
   return out;
 }
 

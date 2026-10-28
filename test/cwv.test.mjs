@@ -42,3 +42,25 @@ test("slow in most runs = the page itself is slow", () => {
   assert.equal(m.details.verdict, "page");
   assert.equal(m.details.slowRuns, 4);
 });
+
+test("long Lighthouse runs: Chrome is restarted every RESTART_EVERY pages and after a broken-Chrome error, retrying the page once", async () => {
+  const { chromeSession, RESTART_EVERY } = await import("../src/cwv.mjs");
+  let launches = 0, killed = 0, broken = new Set(["https://example.com/p3"]);
+  const launch = async () => ({ port: ++launches, kill: async () => { killed++; } });
+  const run = async (port, url) => {
+    if (broken.has(url)) { broken.delete(url); throw new Error("An internal Chrome error occurred. Please restart Chrome and try re-running Lighthouse."); }
+    return { port, url };
+  };
+  const s = chromeSession(launch, run, 4);
+  const got = [];
+  for (let i = 1; i <= 9; i++) got.push(await s.measure(`https://example.com/p${i}`));
+  await s.close();
+  assert.equal(got.length, 9, "every page measured, including the one that hit the broken Chrome");
+  assert.equal(got[2].port, 2, "p3 retried in a fresh Chrome");
+  assert.ok(launches >= 3, "periodic restarts too");
+  assert.equal(killed, launches, "every Chrome is closed");
+  const other = chromeSession(launch, async () => { throw new Error("page returned 404"); });
+  await assert.rejects(other.measure("https://example.com/x"), /404/, "ordinary errors are not retried");
+  await other.close();
+  assert.equal(RESTART_EVERY, 15);
+});
