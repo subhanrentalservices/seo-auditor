@@ -22,6 +22,7 @@ export const routes = [
   ["POST", /^\/api\/projects\/(\d+)\/audits$/, ([id]) => api.startProjectAudit(id)],
   ["GET", /^\/api\/audits\/(\d+)$/, ([id]) => api.getAudit(id)],
   ["POST", /^\/api\/audits\/(\d+)\/stop$/, ([id]) => api.stopAudit(id)],
+  ["POST", /^\/api\/audits\/(\d+)\/resume$/, ([id]) => api.resumeProjectAudit(id)],
   ["GET", /^\/api\/audits\/(\d+)\/issues\/([a-z0-9_]+)$/, ([id, check], q) => api.getIssue(id, check, q)],
   ["GET", /^\/api\/audits\/(\d+)\/pages$/, ([id], q) => api.listPages(id, q)],
   ["GET", /^\/api\/audits\/(\d+)\/page$/, ([id], q) => api.getPage(id, q.url)],

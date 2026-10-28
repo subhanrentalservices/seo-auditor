@@ -301,12 +301,12 @@ export function schemaFindings(docs, { text = "", stated, ogSiteName, itemtypes 
   return d;
 }
 
-/** Page rules for the findings above (indexable pages). ctx.auditDate = yyyy-mm-dd; ctx.renderJs = rendering on. */
+/** Page rules for the findings above (indexable pages). ctx.auditDate = yyyy-mm-dd; ctx.renderJs = false | "auto" | true (render-mode.mjs). */
 export function schemaPageIssues(d, ctx = {}) {
   const out = [];
   if (d.schemaMissing?.req.length) out.push(["schema_required_missing", d.schemaMissing.req.join("; ")]);
   if (d.schemaMissing?.rec.length) out.push(["schema_recommended_missing", d.schemaMissing.rec.join("; ")]);
-  if (d.schemaHidden?.length) out.push(["schema_value_not_visible", d.schemaHidden.join("; ") + (d.schemaHiddenPrice && ctx.renderJs === false ? " (raw HTML only; enable rendering if the price is added by JavaScript)" : "")]);
+  if (d.schemaHidden?.length) out.push(["schema_value_not_visible", d.schemaHidden.join("; ") + (d.schemaHiddenPrice && (ctx.renderJs === false || (ctx.renderJs === "auto" && !d.rendered)) ? " (raw HTML only; enable rendering if the price is added by JavaScript)" : "")]);
   if (d.schemaRetired?.length) out.push(["schema_retired_type", d.schemaRetired.join("; ")]);
   const dates = [...(d.schemaDates || [])];
   const today = ctx.auditDate || new Date().toISOString().slice(0, 10);

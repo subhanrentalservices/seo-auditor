@@ -234,7 +234,13 @@ function renderTools() {
       e.currentTarget.disabled = true;
       try { const r = await api(`/api/projects/${p.id}/audits`, { method: "POST", body: {} }); state.progress.set(p.id, { auditId: r.auditId }); p.running = r.auditId; renderTools(); toast("Audit started"); }
       catch (err) { toast(err.message); e.currentTarget.disabled = false; }
-    } }, "Run audit"));
+    } }, "Run audit"),
+    // The newest audit was stopped or interrupted: continue it without fetching its stored pages again.
+    !running && ["stopped", "failed"].includes(p.history[0]?.status) ? h("button", { class: "btn", title: "Continue the last audit; pages it already stored aren't fetched again", onclick: async (e) => {
+      const b = e.currentTarget; b.disabled = true;
+      try { const r = await api(`/api/audits/${p.history[0].id}/resume`, { method: "POST", body: {} }); state.progress.set(p.id, { auditId: r.auditId }); p.running = r.auditId; renderTools(); toast("Audit resumed"); }
+      catch (err) { toast(err.message); b.disabled = false; }
+    } }, "Resume audit") : null);
 }
 function openDrawer(...content) {
   const d = document.getElementById("drawer");

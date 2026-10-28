@@ -14,6 +14,14 @@ export const NAV = [
 
 const noAudit = (ctx) => h("div", { class: "card empty" }, h("h2", {}, "No finished audit yet"),
   h("p", {}, ctx.project.running ? "The first audit is running — results appear here when it finishes." : "Press “Run audit” to crawl the site."));
+/** The audit's rendering mode and, for auto, what the sample decided (site_info.render, render-mode.mjs). */
+const renderText = (info) => {
+  const r = info.render, n = r?.rendered ?? 0;
+  if (r?.error) return `Not available (${r.error})`;
+  if (info.renderJs === "auto") return r?.decision === "all" ? `Auto: every page (${r.dependent} of ${r.sampled} sampled pages depend on JavaScript)`
+    : `Auto: ${n} page(s) rendered (${r?.dependent ?? 0} of ${r?.sampled ?? 0} sampled pages depend on JavaScript)`;
+  return info.renderJs ? (r ? `Every page (${n} rendered)` : "On") : "Off (HTML only)";
+};
 
 // ---------- Projects ----------
 VIEWS.projects = async (ctx) => {
@@ -80,7 +88,7 @@ VIEWS.overview = async (ctx) => {
         h("dt", {}, "robots.txt"), h("dd", {}, info.robotsTxt ? "✓ found" : "✕ missing"),
         h("dt", {}, "Sitemap"), h("dd", {}, info.sitemapUrls ? `✓ ${num(info.sitemapUrls)} URLs${info.sitemapDeclared ? ", declared in robots.txt" : ""}` : "✕ not found"),
         h("dt", {}, "llms.txt"), h("dd", {}, info.llmsTxt ? "✓ found" : "– not found (optional)"),
-        h("dt", {}, "JavaScript rendering"), h("dd", {}, info.renderJs ? "On" : "Off (HTML only)"),
+        h("dt", {}, "JavaScript rendering"), h("dd", {}, renderText(info)),
         h("dt", {}, "Audit took"), h("dd", {}, a.started_at && a.finished_at ? `${Math.round((new Date(a.finished_at + "Z") - new Date(a.started_at + "Z")) / 1000)} s` : "–")))),
   ];
 };
@@ -269,7 +277,11 @@ VIEWS.settings = async (ctx) => {
   const f = {
     name: h("input", { type: "text", value: p.name }), start_url: h("input", { type: "url", value: p.start_url }),
     maxPages: h("input", { type: "number", min: 0, value: s.maxPages }), concurrency: h("input", { type: "number", min: 1, max: 20, value: s.concurrency }),
-    renderJs: h("input", { type: "checkbox", checked: s.renderJs }), respectRobots: h("input", { type: "checkbox", checked: s.respectRobots }),
+    maxConcurrency: h("input", { type: "number", min: 1, max: 20, value: s.maxConcurrency ?? 12 }),
+    renderJs: h("select", {}, [["false", "Off (HTML only)"], ["auto", "Auto (a sample decides)"], ["true", "Every page"]].map(([v, l]) => h("option", { value: v, selected: String(s.renderJs ?? false) === v }, l))),
+    renderConcurrency: h("input", { type: "number", min: 1, max: 8, value: s.renderConcurrency ?? 3 }),
+    renderUserAgent: h("select", {}, [["audit", "This audit's user agent"], ["googlebot", "Googlebot smartphone (own sites only)"]].map(([v, l]) => h("option", { value: v, selected: (s.renderUserAgent || "audit") === v }, l))),
+    respectRobots: h("input", { type: "checkbox", checked: s.respectRobots }), incremental: h("input", { type: "checkbox", checked: s.incremental === true }),
     includeSubdomains: h("input", { type: "checkbox", checked: s.includeSubdomains }), checkExternalLinks: h("input", { type: "checkbox", checked: s.checkExternalLinks }),
     auditBlockedUrls: h("input", { type: "checkbox", checked: s.auditBlockedUrls === true }),
     siteProbes: h("input", { type: "checkbox", checked: s.siteProbes === true }),
@@ -309,8 +321,12 @@ VIEWS.settings = async (ctx) => {
   return [h("form", { class: "card", onsubmit: save }, h("h2", {}, "Project settings"), h("div", { class: "form" },
     ...row("Name", f.name), ...row("Start URL", f.start_url),
     ...row("Page limit", f.maxPages, "0 = no limit"), ...row("Parallel requests", f.concurrency, "Lower (2–3) for small shared hosting"),
-    ...row("Render JavaScript", f.renderJs, "Uses headless Chrome; slower. Turn on for React/Vue sites."),
+    ...row("Max parallel requests", f.maxConcurrency, "The crawl speeds up to this while the site answers fast and error-free, and drops back on slow-downs, errors or slower answers. A robots.txt Crawl-delay is always respected. Same as Parallel requests = fixed speed."),
+    ...row("Render JavaScript", f.renderJs, "Renders pages in headless Chrome as a 412 px wide phone, like Googlebot (slower). Auto renders the home page and 4 more; if JavaScript adds most of their text or links, every page is rendered, otherwise only pages whose HTML is an empty app shell."),
+    ...row("Pages rendered at a time", f.renderConcurrency, "Parallel renders in the one shared browser (1–8)."),
+    ...row("Rendering user agent", f.renderUserAgent, "Off by default. Googlebot smartphone shows what your site serves Google, but only use it on sites you own: firewalls that check Googlebot by IP will block it. Crawl requests always use the User agent below."),
     ...row("Respect robots.txt", f.respectRobots), ...row("Include subdomains", f.includeSubdomains), ...row("Check external links", f.checkExternalLinks),
+    ...row("Incremental re-crawl", f.incremental, "Asks the server whether each page changed since the last audit (ETag / Last-Modified). Unchanged pages (304) are copied from that audit and still checked; rendered pages, the start page and audits after a tool update or settings change are always fetched in full. Off by default."),
     ...row("Check robots-blocked URLs", f.auditBlockedUrls, "Fetches up to 50 robots.txt-blocked URLs your site links to, once each, to find a noindex Google can't see. Only for sites you own (off by default)."),
     ...row("Pages that refuse the crawler", f.blockedFallback, "When a page answers 401/403/503 or a bot challenge, it is read again with curl, then in a real browser (up to 50 pages per audit). robots.txt is still obeyed, nothing is disguised or solved, and a 429 \"slow down\" is waited out, never bypassed."),
     ...row("Request headers (own site)", headersEl, "Sent only to this site's own hosts, never to other sites: e.g. a staging password (Authorization) or a bypass cookie your firewall issued. Values stay on this computer and are never shown again. The browser fallback sends only cookies and Basic authentication."),

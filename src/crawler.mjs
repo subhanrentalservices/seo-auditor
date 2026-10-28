@@ -23,9 +23,15 @@ import { pageSignals, signalSiteIssues } from "./page-signals.mjs";
 import { videoUrlsOf, videoFileIssues } from "./video-checks.mjs";
 import { CTA, ctaFoldIssues } from "./fold-check.mjs";
 import { brandTerms } from "./trends.mjs";
-import { createLadder, curlFetch, browserFetch, lazyBrowser, ladderSiteIssues, readCapped, REFUSED, BROWSER_UA } from "./fetch-ladder.mjs";
+import { createLadder, curlFetch, browserFetch, lazyBrowser, ladderSiteIssues, BROWSER_UA } from "./fetch-ladder.mjs";
+import { fetchOnce, fetchFollow, normalize } from "./page-fetch.mjs";
+import { createSpeed, crawlDelayMs } from "./crawl-speed.mjs";
+import { createRenderPlan, renderModeOf } from "./render-mode.mjs";
+import { GOOGLEBOT_SMARTPHONE_UA } from "./ua-parity.mjs";
+import { createReuse, resumeState, CODE_HASH } from "./recrawl.mjs";
+import { jsOnlyRouteIssues, inlineScripts } from "./js-routes.mjs";
 import { requestHeaderValues, headersFor, redact } from "./request-headers.mjs";
-export { rawRenderedDiff };
+export { rawRenderedDiff, normalize };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser (BROWSER_UA,
 // fetch-ladder.mjs), and crawled pages go through the fetch ladder.
@@ -44,16 +50,10 @@ export function hreflangCodeProblem(code) {
   return m[3] ? NOT_REGIONS[m[3].toUpperCase()] || null : null;
 }
 
-export function normalize(u, base) {
-  try {
-    const x = new URL(u, base);
-    if (!/^https?:$/.test(x.protocol)) return null;
-    x.hash = "";
-    if ((x.protocol === "https:" && x.port === "443") || (x.protocol === "http:" && x.port === "80")) x.port = "";
-    return x.href;
-  } catch { return null; }
-}
 const hostKey = (h) => h.replace(/^www\./, "");
+// Internal links the crawl follows: web pages, not files (images, documents, media).
+const FILE_LINK = /\.(pdf|jpe?g|png|gif|webp|svg|zip|mp4|mp3|docx?|xlsx?)$/i;
+const followable = (u) => { try { return /^https?:/.test(u) && !FILE_LINK.test(new URL(u).pathname); } catch { return false; } };
 
 // robots.txt as fetched by each audit, so the next audit can report what changed (robots_txt_changed / _disallow_added).
 db.exec("CREATE TABLE IF NOT EXISTS audit_robots (audit_id INTEGER PRIMARY KEY REFERENCES audits(id) ON DELETE CASCADE, status INTEGER, body TEXT)");
@@ -68,24 +68,6 @@ export function robotsChangeIssues(projectId, auditId, status, body, origin) {
   return robotsDiff(prev.status === 200 ? prev.body : "", status === 200 ? body : "", pages, origin, prev.id);
 }
 
-/** extra: the project's request headers, only ever passed for its own hosts (request-headers.mjs). */
-async function fetchOnce(url, ua, method = "GET", timeout = 20000, extra = null) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeout);
-  const t0 = Date.now();
-  try {
-    const res = await fetch(url, { method, redirect: "manual", signal: ctl.signal, headers: { "User-Agent": ua, Accept: "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "en;q=0.9", ...extra } });
-    const ttfb = Date.now() - t0; // server response time = time to headers, not download
-    const type = res.headers.get("content-type") || "";
-    const body = method === "GET" && res.status < 300 && /html|xml|text/.test(type) ? await res.text() : "";
-    // A refused answer keeps the start of its page, only to recognise a bot challenge (botWall); it isn't the page.
-    const wallBody = method === "GET" && REFUSED.has(res.status) && /html|xml|text/.test(type) ? await readCapped(res).catch(() => "") : "";
-    return { status: res.status, headers: res.headers, type, body, wallBody, ms: ttfb, location: res.headers.get("location") };
-  } catch (e) {
-    return { status: 0, headers: new Headers(), type: "", body: "", ms: Date.now() - t0, error: e.name === "AbortError" ? "timeout" : e.message };
-  } finally { clearTimeout(t); }
-}
-
 /** Bot walls (Akamai, Cloudflare) fingerprint Node's TLS and refuse it even with a browser UA; curl usually passes. */
 function curlStatus(url) {
   return new Promise((resolve) => {
@@ -94,25 +76,6 @@ function curlStatus(url) {
       "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "-H", "Accept-Language: en-AU,en;q=0.9", url],
       { timeout: 20000, windowsHide: true }, (err, stdout) => resolve(Number(stdout) || 0));
   });
-}
-
-/** Follows redirects manually (max 10) so chains and loops are visible. extraFor(url): request headers for that hop
- *  (null for other hosts, so a redirect never carries them off the site). */
-async function fetchFollow(url, ua, extraFor = () => null) {
-  const seen = [url];
-  let r = await fetchOnce(url, ua, "GET", 20000, extraFor(url));
-  const firstStatus = r.status;
-  let total = r.ms;
-  while (r.status >= 300 && r.status < 400 && r.location && seen.length <= 10) {
-    const next = normalize(r.location, seen.at(-1));
-    if (!next) break;
-    if (seen.includes(next)) return { ...r, finalUrl: next, redirect: { hops: seen.length, to: next, firstStatus, loop: true }, ms: total };
-    seen.push(next);
-    r = await fetchOnce(next, ua, "GET", 20000, extraFor(next));
-    total += r.ms;
-  }
-  const redirect = seen.length > 1 ? { hops: seen.length - 1, to: seen.at(-1), firstStatus, finalStatus: r.status } : null;
-  return { ...r, finalUrl: seen.at(-1), redirect, ms: total };
 }
 
 // Content age: a date the page states about itself, as yyyy-mm-dd. Accepts ISO dates/timestamps, "5 January 2024"
@@ -382,14 +345,26 @@ async function browserStatus(browser, url) {
   } catch { return 0; } finally { await page.close(); }
 }
 
-/** Runs fn over items with n workers; n may be a function, so the crawl can slow down mid-batch (fetch ladder). */
-async function pool(n, items, fn, shouldStop) {
-  let i = 0;
+/** Runs fn over items, at most n at a time; n may be a function read before each start, so the crawl can speed up or
+ *  slow down mid-batch (adaptive speed, fetch ladder). Rejects with the first error once running calls have ended. */
+export function pool(n, items, fn, shouldStop = () => false) {
   const width = typeof n === "function" ? n : () => n;
-  await Promise.all(Array.from({ length: width() }, async (_, w) => { while (i < items.length && !shouldStop() && w < width()) { const k = i++; await fn(items[k], k); } }));
+  let i = 0, active = 0, failed = null;
+  return new Promise((resolve, reject) => {
+    const next = () => {
+      while (!failed && active < Math.max(1, width()) && i < items.length && !shouldStop()) {
+        const k = i++;
+        active++;
+        Promise.resolve().then(() => fn(items[k], k)).catch((e) => { failed ||= e; }).finally(() => { active--; next(); });
+      }
+      if (!active) { if (failed) reject(failed); else resolve(); }
+    };
+    next();
+  });
 }
 
-/** deps: test seams for the fetch ladder's curl, browser and sleep (fetch-ladder.mjs). */
+/** deps: test seams for the fetch ladder's curl, browser and sleep (fetch-ladder.mjs) and launchBrowser (rendering);
+ *  resume: true continues a stopped or interrupted audit without fetching its stored pages again (recrawl.mjs). */
 export async function runAudit(auditId, project, settings, onProgress = () => {}, deps = {}) {
   const ctl = { stop: false };
   running.set(auditId, ctl);
@@ -398,12 +373,15 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
   const origin = new URL(start).origin;
   const siteHost = hostKey(new URL(start).hostname);
   const inScope = (u) => { try { const h = hostKey(new URL(u).hostname); return h === siteHost || (settings.includeSubdomains && h.endsWith("." + siteHost)); } catch { return false; } };
-  run("UPDATE audits SET status='running', started_at=datetime('now'), settings=? WHERE id=?", JSON.stringify(settings), auditId);
+  run(deps.resume ? "UPDATE audits SET status='running', finished_at=NULL, message=NULL, started_at=COALESCE(started_at, datetime('now')), settings=? WHERE id=?"
+    : "UPDATE audits SET status='running', started_at=datetime('now'), settings=? WHERE id=?", JSON.stringify(settings), auditId);
   // The project's request headers: values stay out of settings and audit rows, and go to its own hosts only.
   const own = requestHeaderValues(project.id), extraFor = headersFor(own, inScope);
 
   let browser = null, fallbackBrowser = null;
   try {
+    const resumed = deps.resume ? resumeState(auditId, followable) : null; // pages stored by the first run, and its link frontier
+    const reuse = createReuse({ projectId: project.id, auditId, settings, start }); // incremental: unchanged pages copied on 304
     const robotsRes = await fetchFollow(origin + "/robots.txt", ua, extraFor);
     const robotsTxt = robotsRes.status === 200 ? robotsRes.body : "";
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
@@ -418,51 +396,79 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const sitemap = await loadSitemaps(origin, robotsTxt, ua, { normalize });
     saveLastmods(auditId, sitemap.lastmodOf); // the next audit checks them against page changes (sitemap_lastmod_inaccurate)
     const llms = await fetchOnce(origin + "/llms.txt", ua, "GET", 20000, extraFor(origin + "/llms.txt"));
-    if (settings.renderJs) { const { launchChromium } = await import("./browser.mjs"); browser = await launchChromium(); }
+    // Rendering (render-mode.mjs): off, every page, or "auto" (a sample decides; then all pages or the JavaScript-dependent
+    // ones). In auto mode a browser that can't start leaves the audit on raw HTML instead of failing it.
+    const renderMode = renderModeOf(settings.renderJs), launch = deps.launchBrowser || (async () => (await import("./browser.mjs")).launchChromium());
+    const plan = createRenderPlan({ mode: renderMode, concurrency: settings.renderConcurrency, decided: resumed?.renderDecision });
+    if (renderMode === true) browser = await launch();
+    else if (renderMode === "auto") browser = await launch().catch((e) => { plan.unavailable(e.message); return null; });
+    const renderUa = settings.renderUserAgent === "googlebot" ? GOOGLEBOT_SMARTPHONE_UA : ua; // opt-in, own sites only
     // Pages that refuse the normal request: polite retry, curl, then a real browser (setting blockedFallback). Every
     // step obeys robots.txt exactly like the crawl itself.
     const robotsBlocked = (u) => Boolean(settings.respectRobots && robotsTxt && robots.isAllowed(u, "SEOAuditor") === false && robots.isAllowed(u, "*") === false);
-    fallbackBrowser = lazyBrowser(browser, async () => (await import("./browser.mjs")).launchChromium());
-    const ladder = createLadder({ mode: settings.blockedFallback, concurrency: settings.concurrency, inScope, blocked: robotsBlocked, headersFor: extraFor,
-      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor), curl: deps.curl || ((u, o) => curlFetch(u, { ...o, ua })),
+    fallbackBrowser = lazyBrowser(browser, launch);
+    // Transient failures are retried in fetchFollow; a cookie-loop replay never enters a disallowed URL.
+    const fetchOpts = { sleep: deps.sleep, stop: () => ctl.stop, blocked: (x) => inScope(x) && robotsBlocked(x) };
+    // Adaptive speed (crawl-speed.mjs): from concurrency up to maxConcurrency while the site answers fast; the crawl uses
+    // the lower of its width and the ladder's slow-down limit. A robots.txt Crawl-delay is respected.
+    const speed = createSpeed({ start: settings.concurrency, max: settings.maxConcurrency, crawlDelay: settings.respectRobots ? crawlDelayMs(robots) : 0,
+      ...(deps.sleep ? { sleep: (ms) => deps.sleep(ms, () => ctl.stop) } : {}) });
+    const ladder = createLadder({ mode: settings.blockedFallback, concurrency: speed.stats.max, width: speed.width, inScope, blocked: robotsBlocked, headersFor: extraFor,
+      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor, { ...fetchOpts, conditional: reuse.conditional(u) }), curl: deps.curl || ((u, o) => curlFetch(u, { ...o, ua })),
       browser: deps.browser || (async (u, o) => browserFetch(await fallbackBrowser.get(), u, { ...o, ua, blocked: (x) => inScope(x) && robotsBlocked(x) })) });
 
-    const seen = new Map([[start, 0]]);
-    const queue = [start];
-    for (const u of sitemap.urls) if (u && inScope(u) && !seen.has(u)) { seen.set(u, null); queue.push(u); }
+    const parallel = () => Math.min(ladder.parallel(), speed.width());
+    const seen = new Map(resumed ? resumed.pages.map((x) => [x.url, x.depth]) : []); // a resumed audit's stored pages aren't queued again
+    const queue = [];
+    const enqueue = (u, depth) => { if (!seen.has(u)) { seen.set(u, depth); queue.push(u); } };
+    enqueue(start, 0);
+    for (const u of sitemap.urls) if (u && inScope(u)) enqueue(u, null);
+    for (const [u, depth] of resumed?.frontier || []) if (inScope(u)) enqueue(u, depth);
     const insPage = db.prepare(`INSERT OR REPLACE INTO pages (audit_id,url,final_url,status,depth,content_type,response_ms,bytes,title,description,h1,canonical,indexable,in_sitemap,outlinks,words,text_ratio,data)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const insLink = db.prepare("INSERT INTO links (audit_id,from_url,to_url,anchor,internal,nofollow,kind,placement,rel) VALUES (?,?,?,?,?,?,?,?,?)");
     const insText = db.prepare("INSERT OR REPLACE INTO page_text (audit_id, url, text) VALUES (?,?,?)"); // for link suggestions (I4)
-    const hashes = new Map();
+    const hashes = new Map(resumed?.hashes);
     const imgSet = new Set(); const extSet = new Set(); const resSet = new Set();
-    let crawled = 0, started = 0; // started: reserves slots so parallel workers respect maxPages
+    for (const f of resumed?.files || []) (f.kind === "img" ? (f.internal ? imgSet : null) : f.kind === "res" ? resSet : extSet)?.add(f.url);
+    let crawled = resumed?.pages.length || 0, started = crawled; // started: reserves slots so parallel workers respect maxPages
 
     while (queue.length && !ctl.stop) {
-      const batch = queue.splice(0, Math.max(settings.concurrency * 4, 20));
-      await pool(ladder.parallel, batch, async (url) => {
+      const batch = queue.splice(0, Math.max(parallel() * 4, 20));
+      await pool(parallel, batch, async (url) => {
         if (settings.maxPages && started >= settings.maxPages) return;
         started++;
         const depth = seen.get(url);
         if (robotsBlocked(url)) { insPage.run(auditId, url, url, 0, depth, "", 0, 0, "", "", "", null, 0, sitemap.urls.has(url) ? 1 : 0, 0, 0, 0, JSON.stringify({ blockedByRobots: true })); crawled++; return; }
-        const r = await ladder.fetch(url);
+        await speed.gate();
+        let r = await ladder.fetch(url);
+        speed.record({ ms: r.ms, status: r.directStatus ?? r.status, error: r.error, retries: r.retries, slowDown: r.rateLimited, direct: r.via === "fetch" || r.via === "retry" });
+        // Incremental: unchanged since the last audit (304): its stored page goes through the steps below like a fetched one.
+        const old = r.status === 304 && !r.redirect ? reuse.page(url) : null;
+        if (old) r = { ...r, status: 200, type: old.row.content_type || "text/html", body: "", size: old.row.bytes, finalUrl: url };
         const final = r.finalUrl;
         const direct = r.via === "fetch" || r.via === "retry"; // a fallback's HTML isn't re-rendered: the renderer would meet the wall again
         let html = r.body;
-        let jsWordsRaw = null, raw = null, rawParse = null, rendered = null;
-        if (browser && direct && r.status === 200 && /html/.test(r.type)) {
+        let jsWordsRaw = null, raw = null, rawParse = null, rendered = null, renderReason = null;
+        if (browser && direct && !old && r.status === 200 && /html/.test(r.type)) {
           rawParse = parseHtml(html, final);
-          rendered = await renderPage(browser, final, ua);
+          const want = await plan.render({ url: final, home: url === start, html: r.body, raw: rawParse, parse: parseHtml, inScope, run: () => renderPage(browser, final, renderUa) });
+          rendered = want.rendered;
+          if (rendered?.html) renderReason = want.reason;
           // After a JavaScript redirect the rendered DOM is another URL's page (crawled on its own): keep the raw HTML.
           if (rendered?.html && !jsRedirectOf(final, rendered, rawParse.data.metaRefresh)) { jsWordsRaw = rawParse.words; raw = rawParse; html = rendered.html; }
         }
         const isHtml = /html/.test(r.type) && r.status === 200;
-        const p = isHtml ? parseHtml(html, final) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], res: [], words: 0, text: "", data: {} };
+        const p = old ? old.p : isHtml ? (rawParse && html === r.body ? rawParse : parseHtml(html, final)) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], res: [], words: 0, text: "", data: {} };
         const d = { ...p.data, redirect: r.redirect || undefined, error: r.error ? redact(r.error, own) : undefined, fetchedVia: r.via };
         if (r.botWall) d.botWall = { ...r.botWall, status: r.directStatus ?? r.status };
         if (r.tried?.length) d.fallbackTried = r.tried;
         if (!direct) { d.directStatus = r.directStatus; d.fallbackMs = r.fallbackMs; } // response_ms stays empty: not the server's answer to a crawler
         if (r.rateLimited) d.rateLimited = true;
+        if (r.retries) d.retries = r.retries; // transient failures retried (page-fetch.mjs)
+        if (r.charset) d.charset = r.charset; // decoded as declared, not as UTF-8
+        if (r.truncated) d.truncated = true; // body over 15 MB: read stopped there
+        if (r.cookieLoop) d.cookieRedirect = r.cookieLoop; // cookie_required_redirect
         if (isHtml) {
           const hc = headClosedEarly(r.body); // always the raw source: a rendered DOM has already been repaired
           if (hc) d.headClosedEarly = hc;
@@ -479,10 +485,18 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         applyHeaderRobots(d, r.headers.get("x-robots-tag") || ""); // only googlebot: or unscoped header lines count
         const linkCanon = linkHeaderCanonical(r.headers.get("link"), final);
         if (linkCanon) d.canonicalHeader = linkCanon;
-        if (isHtml && p.text) d.textHash = textFingerprint(p.text); // every page, even short ones (soft-404 and canonical checks)
+        if (isHtml && p.text && !old) d.textHash = textFingerprint(p.text); // every page, even short ones (soft-404 and canonical checks)
+        if (p.textHash) d.contentHash = p.textHash; // duplicate check, also for a resumed audit or a reused page
+        if (old) d.reused304 = { audit: reuse.auditId };
+        if (direct && isHtml) { // validators for the next incremental audit (recrawl.mjs)
+          const et = r.headers.get("etag"), lm = r.headers.get("last-modified");
+          if (et) d.etag = et.slice(0, 200);
+          if (lm) d.lastModified = lm.slice(0, 100);
+        }
         if (jsWordsRaw !== null) { d.jsWordsRaw = jsWordsRaw; d.jsWordsRendered = p.words; }
+        if (renderReason) { d.rendered = true; d.renderReason = renderReason; }
         const indexable = r.status === 200 && isHtml && !d.noindex && (!p.canonical || p.canonical === final || p.canonical === url) ? 1 : 0;
-        const bytes = Buffer.byteLength(r.body || "");
+        const bytes = r.size ?? Buffer.byteLength(r.body || ""); // bytes as served (decoded text may be longer or shorter)
         const ratio = bytes ? +(((d.visibleBytes ?? Buffer.byteLength(p.text)) / bytes) * 100).toFixed(1) : 0;
         // ?service=… style links that pre-fill a form: the URL's canonical is the same page without the query, so its
         // page checks belong to that clean URL (crawl it if no link reaches it).
@@ -496,7 +510,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
           insLink.run(auditId, final, l.to, l.anchor, internal ? 1 : 0, l.nofollow ? 1 : 0, "a", l.placement, l.rel || null);
           if (internal) {
             internalOut++; if (l.nofollow) nofollowInternal++;
-            if (!seen.has(l.to) && /^https?:/.test(l.to) && !/\.(pdf|jpe?g|png|gif|webp|svg|zip|mp4|mp3|docx?|xlsx?)$/i.test(new URL(l.to).pathname)) {
+            if (!seen.has(l.to) && followable(l.to)) {
               seen.set(l.to, (depth ?? 0) + 1); queue.push(l.to);
             } else if (seen.get(l.to) === null) seen.set(l.to, (depth ?? 0) + 1);
           } else { extLinks++; if (l.nofollow) extNofollow++; extSet.add(l.to); }
@@ -515,21 +529,27 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       if (settings.maxPages && crawled >= settings.maxPages) break;
     }
 
+    plan.finish();
+    if (!home && resumed && !ctl.stop) { // the start page was stored by the first run: its raw HTML once more, for the site-level checks only
+      const h = await fetchFollow(start, ua, extraFor, fetchOpts);
+      if (h.status === 200 && /html/.test(h.type)) home = { html: h.body, url: h.finalUrl, dom: h.body };
+    }
     // ---- post-crawl: link graph, resource checks, site rules ----
     run(`UPDATE pages SET inlinks = (SELECT COUNT(DISTINCT l.from_url) FROM links l WHERE l.audit_id=pages.audit_id AND l.kind='a' AND l.internal=1 AND l.to_url IN (pages.url, pages.final_url) AND l.from_url <> pages.url) WHERE audit_id=?`, auditId);
     const statusOf = new Map(all("SELECT url, final_url, status FROM pages WHERE audit_id=?", auditId).flatMap((p) => [[p.url, p.status], [p.final_url, p.status]]));
-    const checkStatus = async (set, limit, width = settings.concurrency) => {
+    const checkStatus = async (set, limit, width = settings.concurrency, gate = async () => {}) => { // gate: Crawl-delay on own files
       const out = new Map(); const list = [...set].filter((u) => !statusOf.has(u)).slice(0, limit);
       await pool(width, list, async (u) => {
+        await gate();
         let r = await fetchOnce(u, ua, "HEAD", 15000, extraFor(u));
-        if (r.status === 0 || r.status === 405 || r.status >= 400) r = await fetchOnce(u, BROWSER_UA, "GET", 15000, extraFor(u));
-        if ([0, 401, 403, 429].includes(r.status)) r = { status: (await curlStatus(u)) || r.status };
+        if (r.status === 0 || r.status === 405 || r.status >= 400) { await gate(); r = await fetchOnce(u, BROWSER_UA, "GET", 15000, extraFor(u)); }
+        if ([0, 401, 403, 429].includes(r.status)) { await gate(); r = { status: (await curlStatus(u)) || r.status }; }
         out.set(u, r.status);
       }, () => ctl.stop);
       return out;
     };
-    const imgStatus = await checkStatus(imgSet, 20000, ladder.parallel); // own files: at the crawl's (possibly lowered) pace
-    const resStatus = await checkStatus(resSet, 5000, ladder.parallel);
+    const imgStatus = await checkStatus(imgSet, 20000, parallel, speed.gate); // own files: at the crawl's (possibly lowered) pace
+    const resStatus = await checkStatus(resSet, 5000, parallel, speed.gate);
     const extStatus = settings.checkExternalLinks ? await checkStatus(extSet, 5000) : new Map();
     const refused = [...extStatus].filter(([, s]) => [401, 403, 429].includes(s)).map(([u]) => u).slice(0, 40);
     if (refused.length && !ctl.stop) {
@@ -560,12 +580,13 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // Re-time slow pages one at a time: parallel crawling on small hosts inflates response times.
     for (const p of all("SELECT url, final_url, response_ms FROM pages WHERE audit_id=? AND response_ms > 1500 ORDER BY response_ms DESC LIMIT 50", auditId)) {
       if (ctl.stop) break;
+      await speed.gate();
       const r = await fetchOnce(p.final_url || p.url, ua, "GET", 20000, extraFor(p.final_url || p.url));
       if (r.status === 200 && r.ms < p.response_ms) run("UPDATE pages SET response_ms=? WHERE audit_id=? AND url=?", r.ms, auditId, p.url);
     }
     const pages = all("SELECT * FROM pages WHERE audit_id=?", auditId).map((p) => ({ ...p, data: JSON.parse(p.data) }));
     // auditDate: the day the crawl finished (UTC), used by date checks such as content_stale.
-    const ctx = { siteIsHttps: start.startsWith("https://"), sitemapLoaded: sitemap.found, auditDate: new Date().toISOString().slice(0, 10), renderJs: Boolean(settings.renderJs) };
+    const ctx = { siteIsHttps: start.startsWith("https://"), sitemapLoaded: sitemap.found, auditDate: new Date().toISOString().slice(0, 10), renderJs: renderMode };
     const insIssue = db.prepare("INSERT INTO issues (audit_id,check_id,severity,url,detail) VALUES (?,?,?,?,?)");
     const raise = (id, url, detail = "") => insIssue.run(auditId, id, CHECKS[id][0], url, String(detail).slice(0, 300));
     // hreflang clusters (union-find): language versions of one page may share text, titles and descriptions.
@@ -597,6 +618,13 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // VideoObject thumbnails and files (up to 20 requests, one at a time), and CTAs below the first phone screen (up
     // to 6 pages, in the rendering browser, or in one launched for this when Lighthouse is on).
     const videoFiles = ctl.stop ? [] : await videoFileIssues(pages, { stop: () => ctl.stop }).catch(() => []);
+    // Routes only the site's own JavaScript navigates to (js-routes.mjs): its scripts read as text, candidates fetched
+    // once each (robots.txt obeyed even when the crawl ignores it), never crawled as links.
+    const jsRoutes = ctl.stop ? { issues: [], stats: null } : await jsOnlyRouteIssues({ origin, ua, headersFor: extraFor, rendered: Boolean(browser), gate: speed.gate, stop: () => ctl.stop,
+      scripts: [...resSet].filter((u) => { const x = new URL(u); return x.origin === origin && /\.m?js$/i.test(x.pathname); }), inline: home ? inlineScripts(home.html) : [],
+      known: new Set([...pages.flatMap((x) => [x.url, x.final_url]), ...sitemap.urls, ...all("SELECT DISTINCT to_url FROM links WHERE audit_id=? AND kind='a' AND internal=1", auditId).map((l) => l.to_url)].filter(Boolean)),
+      blocked: (u) => Boolean(robotsTxt) && robots.isAllowed(u, "SEOAuditor") === false,
+      fetchPage: (u) => fetchFollow(u, ua, extraFor, fetchOpts), parse: parseHtml, fingerprint: textFingerprint, notFound: notFoundHash }).catch(() => ({ issues: [], stats: null }));
     let fold = [];
     if (!ctl.stop && (browser || settings.cwvPages > 0)) {
       let b = browser;
@@ -660,7 +688,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     for (const [path, n] of paramTraps(pages.map((p) => p.url))) raise("param_trap", path, `${n} ?parameter variants crawled`);
     const signals = signalSiteIssues({ auditId, projectId: project.id, pages, start, cluster, brandTerms: brandTerms(project, settings), robots: robotsTxt ? robots : null,
       robotsTxt, origin, allow: String(settings.spamAllowTerms || "").split(",").map((t) => t.trim()).filter(Boolean) });
-    for (const [id, u, det] of [...signals, ...videoFiles, ...fold, ...ladderSiteIssues(ladder.stats, start)]) raise(id, u, det);
+    for (const [id, u, det] of [...signals, ...videoFiles, ...fold, ...ladderSiteIssues(ladder.stats, start), ...jsRoutes.issues]) raise(id, u, det);
     const aLinks = db.prepare("SELECT DISTINCT from_url,to_url,internal,nofollow,rel FROM links WHERE audit_id=? AND kind='a'").iterate(auditId);
     for (const [id, u, det] of [...linkSiteIssues(aLinks, { pages, redirOf, inScope, robots: robotsTxt ? robots : null, auditDate: ctx.auditDate }), ...urlVariantIssues(pages)]) raise(id, u, det);
     db.exec("COMMIT");
@@ -676,8 +704,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const blocks = get("SELECT COUNT(*) n FROM issues WHERE audit_id=? AND check_id='ai_search_bot_blocked'", auditId).n;
     const aiScore = aiReadiness(aiRows, pages.filter((p) => p.indexable).length, blocks);
     const siteInfo = { robotsTxt: Boolean(robotsTxt), sitemapUrls: sitemap.urls.size, sitemapDeclared: sitemap.declared, llmsTxt: llms.status === 200,
-      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: Boolean(settings.renderJs),
-      fetchLadder: { via: ladder.stats.via, walls: ladder.stats.walls, slowDowns: ladder.stats.slowDowns, parallel: ladder.stats.parallel } };
+      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: renderMode, render: plan.summary(), codeHash: CODE_HASH, incremental: reuse.summary(), resumed: Boolean(resumed) || undefined, jsRoutes: jsRoutes.stats,
+      fetchLadder: { via: ladder.stats.via, walls: ladder.stats.walls, slowDowns: ladder.stats.slowDowns, parallel: ladder.stats.parallel }, speed: speed.stats };
     run("UPDATE audits SET ai_readiness=?, site_info=? WHERE id=?", aiScore, JSON.stringify(siteInfo), auditId);
     run("UPDATE audits SET status=?, finished_at=datetime('now'), pages_crawled=?, pages_queued=0, health=?, errors=?, warnings=?, notices=?, message=? WHERE id=?",
       ctl.stop ? "stopped" : "done", pages.length, health, count("error"), count("warning"), count("notice"), ctl.stop ? "Stopped by user" : null, auditId);

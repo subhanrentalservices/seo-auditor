@@ -9,6 +9,7 @@
 // and files. A slow-down answer is never escalated to curl or the browser. botWall() recognises bot challenge and
 // firewall block pages. curl, the browser and sleeping are injected, so tests need no network.
 import { spawn } from "node:child_process";
+import { decodeBody, MAX_HTML } from "./body.mjs";
 
 export const AUDITOR_UA = "Mozilla/5.0 (compatible; SEOAuditor/1.0; +local)"; // the default crawl user agent (db.mjs)
 export const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
@@ -18,13 +19,13 @@ export const RETRY_MAX_MS = 60_000;    // a longer Retry-After isn't retried ear
 export const WAIT_BUDGET_MS = 180_000; // total waiting per audit
 export const DEFAULT_429_MS = 10_000;  // a 429 without Retry-After
 export const BROWSER_PAGES = 50;       // browser fallbacks per audit
-export const MAX_BODY = 10 * 1024 * 1024;
+export const MAX_BODY = MAX_HTML; // 15 MB, as for the normal fetch (body.mjs)
 export const WALL_BODY = 64 * 1024;    // kept from a refused answer, only to recognise a challenge page
 export const FALLBACK_MODES = ["off", "curl", "browser"];
 
 const hget = (h, k) => String((typeof h?.get === "function" ? h.get(k) : h?.[k] ?? h?.[k.toLowerCase()]) ?? "");
 
-/** Reads at most `max` bytes of a fetch Response body as text, then drops the rest. */
+/** Reads at most `max` bytes of a fetch Response body as text (in its declared charset), then drops the rest. */
 export async function readCapped(res, max = WALL_BODY) {
   if (!res.body) return "";
   const reader = res.body.getReader(), parts = [];
@@ -32,7 +33,7 @@ export async function readCapped(res, max = WALL_BODY) {
   try {
     while (n < max) { const { done, value } = await reader.read(); if (done) break; parts.push(Buffer.from(value)); n += value.length; }
   } finally { reader.cancel().catch(() => {}); }
-  return Buffer.concat(parts).subarray(0, max).toString("utf8");
+  return decodeBody(Buffer.concat(parts).subarray(0, max), res.headers?.get?.("content-type") || "").text;
 }
 
 // ---------------- Bot walls ----------------
@@ -121,7 +122,7 @@ export function parseCurlOutput(buf, maxBytes = MAX_BODY) {
       if (i > 0) try { headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim()); } catch { /* not a valid header line */ }
     }
     const type = headers.get("content-type") || "";
-    const text = /html|xml|text/.test(type) ? after.subarray(0, maxBytes).toString("utf8") : "";
+    const text = /html|xml|text/.test(type) ? decodeBody(after.subarray(0, maxBytes), type).text : "";
     return { status, headers, type, body: status < 300 ? text : "", wallBody: status >= 300 ? text.slice(0, WALL_BODY) : "", location: headers.get("location") };
   }
   return { status: 0, headers: new Headers(), type: "", body: "", wallBody: "", location: null, error: "no HTTP response from curl" };
@@ -193,7 +194,9 @@ export async function browserFetch(browser, url, { headers = null, ua = AUDITOR_
     const status = doc.status(), raw = await doc.allHeaders().catch(() => ({})), h = new Headers();
     for (const [k, v] of Object.entries(raw)) for (const x of String(v).split("\n")) try { h.append(k, x); } catch { /* skip */ }
     const type = h.get("content-type") || "";
-    const text = /html|xml|text/.test(type) ? (await doc.text().catch(() => "")).slice(0, MAX_BODY) : "";
+    // The raw bytes, decoded with the page's own charset like the normal fetch (older fakes offer text() only).
+    const bytes = /html|xml|text/.test(type) && doc.body ? await doc.body().catch(() => null) : null;
+    const text = !/html|xml|text/.test(type) ? "" : bytes ? decodeBody(bytes.subarray(0, MAX_BODY), type).text : (await doc.text().catch(() => "")).slice(0, MAX_BODY);
     let q = doc.request(), hops = 0;
     while (q.redirectedFrom()) { q = q.redirectedFrom(); hops++; }
     const firstStatus = hops ? (await q.response().catch(() => null))?.status() : null;
@@ -219,9 +222,10 @@ const waitWithStop = async (ms, stop) => { const end = Date.now() + ms; while (D
 /** Creates the ladder for one audit. fetchPage(url) → the crawler's normal result ({ status, headers, body, wallBody,
  *  finalUrl, redirect, ms, error }); curl(url, { headers }) and browser(url, { headers }) → the same shape;
  *  inScope(url): the project's own hosts; blocked(url): robots.txt disallows it; headersFor(url): the project's request
- *  headers for that URL (null off-site). Returns { fetch(url), parallel(), stats }. */
+ *  headers for that URL (null off-site); width(): the crawl's current parallel requests, when it changes them itself.
+ *  Returns { fetch(url), parallel(), stats }. */
 export function createLadder({ mode = "browser", concurrency = 6, fetchPage, curl = null, browser = null, inScope = () => true, blocked = () => false,
-  headersFor = () => null, sleep = waitWithStop, stop = () => false, now = Date.now, browserPages = BROWSER_PAGES, browserParallel = 2 } = {}) {
+  headersFor = () => null, sleep = waitWithStop, stop = () => false, now = Date.now, browserPages = BROWSER_PAGES, browserParallel = 2, width = null } = {}) {
   if (!FALLBACK_MODES.includes(mode)) mode = "browser";
   let parallel = Math.max(1, Math.floor(concurrency) || 1), browserUsed = 0, active = 0;
   const waiters = [];
@@ -230,11 +234,14 @@ export function createLadder({ mode = "browser", concurrency = 6, fetchPage, cur
   const wallOf = (r) => (r ? botWall({ status: r.status, headers: r.headers, body: r.body || r.wallBody }) : null);
   const slowDownOf = (r) => r.status === 429 || (r.status === 503 && Boolean(hget(r.headers, "retry-after")));
   const note = (r) => {
+    // width(): the crawl's current parallel requests (adaptive speed, crawl-speed.mjs); a slow-down halves what is in use.
+    const current = Math.min(parallel, width ? Math.max(1, width()) : parallel);
+    if (!stats.slowDowns) stats.from = current;
     stats.slowDowns++;
     stats.statuses[r.status] = (stats.statuses[r.status] || 0) + 1;
     const ra = retryAfterMs(hget(r.headers, "retry-after"), now());
     if (ra !== null) stats.retryAfterMaxS = Math.max(stats.retryAfterMaxS, Math.round(ra / 1000));
-    parallel = stats.parallel = Math.max(1, Math.floor(parallel / 2)); // fewer parallel requests for the rest of the audit
+    parallel = stats.parallel = Math.max(1, Math.floor(current / 2)); // fewer parallel requests for the rest of the audit
   };
   const answered = (r) => r && r.status > 0 && !REFUSED.has(r.status) && !wallOf(r);
   const merge = (direct, r, extraHops, firstStatus) => {

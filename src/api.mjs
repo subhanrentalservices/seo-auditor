@@ -2,9 +2,10 @@
 import { all, get, run, projectSettings, DEFAULT_SETTINGS } from "./db.mjs";
 import { CHECKS, CRAWL } from "./checks.mjs";
 import "./ai-checks.mjs";
-import { startAudit, stop, activeAudit } from "./runner.mjs";
+import { startAudit, stop, activeAudit, resumeAudit } from "./runner.mjs";
 import { cleanRequestHeaders, saveRequestHeaders, maskHeaders } from "./request-headers.mjs";
 import { FALLBACK_MODES } from "./fetch-ladder.mjs";
+import { renderModeOf, RENDER_UAS } from "./render-mode.mjs";
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const SEV_ORDER = { error: 0, warning: 1, notice: 2 };
@@ -30,6 +31,10 @@ function cleanSettings(input = {}) {
     else out[k] = String(v ?? "").slice(0, k === "targetKeywords" ? 4000 : 500);
   }
   if (out.concurrency !== undefined) out.concurrency = Math.min(Math.max(out.concurrency, 1), 20);
+  if (out.maxConcurrency !== undefined) out.maxConcurrency = Math.min(Math.max(out.maxConcurrency, 1), 20); // below concurrency = no speeding up
+  if ("renderJs" in input) out.renderJs = renderModeOf(input.renderJs); // false | "auto" | true (not coerced to a boolean)
+  if (out.renderConcurrency !== undefined) out.renderConcurrency = Math.min(Math.max(out.renderConcurrency, 1), 8);
+  if (out.renderUserAgent !== undefined && !RENDER_UAS.includes(out.renderUserAgent)) out.renderUserAgent = DEFAULT_SETTINGS.renderUserAgent;
   if (out.schedule !== undefined && !["off", "daily", "weekly"].includes(out.schedule)) out.schedule = "off";
   if (out.blockedFallback !== undefined && !FALLBACK_MODES.includes(out.blockedFallback)) out.blockedFallback = DEFAULT_SETTINGS.blockedFallback;
   if ("requestHeaders" in input) out.requestHeaders = cleanRequestHeaders(input.requestHeaders);
@@ -93,6 +98,7 @@ export function deleteProject(id) {
 
 export function startProjectAudit(id) { return { auditId: startAudit(project(id).id) }; }
 export function stopAudit(id) { stop(audit(id).id); return { ok: true }; }
+export function resumeProjectAudit(id) { return { auditId: resumeAudit(audit(id).id) }; }
 
 export function getAudit(id) {
   const a = audit(id);

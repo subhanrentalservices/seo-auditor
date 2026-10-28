@@ -68,8 +68,12 @@ for (const [table, col, type] of [["audits", "ai_readiness", "INTEGER"], ["audit
 export const DEFAULT_SETTINGS = {
   maxPages: 0,            // 0 = no limit
   concurrency: 6,
+  maxConcurrency: 12,     // adaptive speed: parallel requests may rise to this while the site answers fast (crawl-speed.mjs); = concurrency turns it off
   respectRobots: true,
-  renderJs: false,        // render each page in headless Chromium (slower)
+  incremental: false,     // re-crawl: send the last audit's ETag/Last-Modified; a 304 page is copied from that audit (recrawl.mjs)
+  renderJs: false,        // false | "auto" | true: render pages in headless Chromium (auto: a sample decides which; render-mode.mjs)
+  renderConcurrency: 3,   // pages rendered at a time in the one shared browser
+  renderUserAgent: "audit", // "audit" (the user agent below) | "googlebot" (Googlebot smartphone, opt-in, own sites only)
   includeSubdomains: false,
   checkExternalLinks: true,
   auditBlockedUrls: false, // opt-in: fetch robots.txt-blocked URLs the site links to once, to find a noindex Google can't see (own sites only)

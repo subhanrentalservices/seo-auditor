@@ -49,11 +49,52 @@ export function rawRenderedDiff(raw, ren, url = null) {
 
 const LOGGED = new Set(["script", "stylesheet", "xhr", "fetch", "font"]);
 
+// Rendering like Google (REQ-055 group 2, Oct 2026): Googlebot renders as a smartphone about 412 px wide (mobile-first
+// indexing), so the page gets a phone viewport. Each page has its own browser context: no cookies or storage carry
+// over between pages (Google renders stateless).
+export const RENDER_VIEWPORT = { width: 412, height: 915 };
+const SKIPPED = new Set(["image", "media"]);
+
+/** Scrolls to the bottom one screen at a time, so content loaded on scroll (IntersectionObserver, lazy lists) appears.
+ *  Google expands the viewport to the page's height instead; stepping through it triggers the same loaders. At most
+ *  `steps` screens, while left() ms remain. */
+async function scrollToBottom(page, left, steps = 25, pauseMs = 250) {
+  let lastHeight = -1;
+  for (let i = 0; i < steps && left() > 1500; i++) {
+    const [end, height] = await page.evaluate(() => {
+      const el = document.scrollingElement || document.documentElement;
+      window.scrollBy(0, window.innerHeight);
+      return [window.scrollY + window.innerHeight >= el.scrollHeight - 2, el.scrollHeight];
+    });
+    // Two animation frames (IntersectionObserver callbacks run on a frame), then time for lazy content to load.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))).catch(() => {});
+    await page.waitForTimeout(pauseMs);
+    if (end && height === lastHeight) break; // at the bottom, and nothing more was added below
+    lastHeight = height;
+  }
+  await page.waitForLoadState("networkidle", { timeout: Math.min(3000, left()) }).catch(() => {});
+}
+
 /** Renders a page in the browser and logs what Google's renderer would also see: main-frame document requests (a
  *  JavaScript redirect makes a new one), script/style/data/font requests with their status, and uncaught errors.
- *  Returns { html, url, docs, requests, errors }, or null when the page didn't load. */
-export async function renderPage(browser, url, ua) {
-  const page = await browser.newPage({ userAgent: ua });
+ *  opts: mobile (phone viewport, default on), blockMedia (images, video and audio aren't downloaded and fonts are only
+ *  asked with HEAD, so a broken font still shows its status; the DOM is unchanged: an <img> keeps its src, only the
+ *  pixels are missing), scroll (to the bottom, for lazy-loaded content), idleMs (wait for network idle, capped),
+ *  totalMs (the whole page). Returns { html, url, docs, requests, errors, ms }, or null when the page didn't load. */
+export async function renderPage(browser, url, ua, { mobile = true, blockMedia = true, scroll = true, idleMs = 10000, totalMs = 45000 } = {}) {
+  const t0 = Date.now(), left = () => Math.max(1000, totalMs - (Date.now() - t0));
+  const context = await browser.newContext({ userAgent: ua, ...(mobile ? { viewport: RENDER_VIEWPORT, isMobile: true, hasTouch: true, deviceScaleFactor: 2.625 } : {}) });
+  const page = await context.newPage();
+  if (blockMedia) await page.route("**/*", async (route) => {
+    const type = route.request().resourceType();
+    if (SKIPPED.has(type)) return route.abort().catch(() => {});
+    if (type !== "font") return route.continue().catch(() => {});
+    try { // a server that refuses HEAD is asked once more with GET, so it isn't reported as a broken font
+      let res = await route.fetch({ method: "HEAD" });
+      if (res.status() >= 400) res = await route.fetch();
+      await route.fulfill({ status: res.status(), body: "" });
+    } catch { await route.abort().catch(() => {}); }
+  });
   const docs = [], requests = new Map(), errors = [];
   page.on("request", (q) => {
     if (q.isNavigationRequest() && q.frame() === page.mainFrame()) { if (docs.push(q.url()) === 10) page.close().catch(() => {}); } // a redirect loop: stop waiting
@@ -62,11 +103,13 @@ export async function renderPage(browser, url, ua) {
   page.on("response", (r) => { const x = requests.get(r.request()); if (x) x.status = r.status(); });
   page.on("pageerror", (e) => { if (errors.length < 10) errors.push({ message: String(e.message || e).slice(0, 200), stack: String(e.stack || "").slice(0, 1000) }); });
   try {
-    try { await page.goto(url, { waitUntil: "networkidle", timeout: 45000 }); }
-    catch { if (docs.length < 2) return null; await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}); } // a JavaScript redirect interrupted the load
+    try { await page.goto(url, { waitUntil: "domcontentloaded", timeout: left() }); }
+    catch { if (docs.length < 2) return null; } // a JavaScript redirect interrupted the load
+    await page.waitForLoadState("networkidle", { timeout: Math.min(idleMs, left()) }).catch(() => {}); // capped: some pages never go idle
+    if (scroll) await scrollToBottom(page, left).catch(() => {});
     const html = await page.content().catch(() => null);
-    return { html, url: page.url(), docs, requests: [...requests.values()], errors };
-  } catch { return null; } finally { await page.close().catch(() => {}); }
+    return { html, url: page.url(), docs, requests: [...requests.values()], errors, ms: Date.now() - t0 };
+  } catch { return null; } finally { await context.close().catch(() => {}); }
 }
 
 // Same-site analytics and tag endpoints (server-side tagging, beacons) aren't needed to render the page.

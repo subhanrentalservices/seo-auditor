@@ -92,6 +92,48 @@ Paid requests run only when you press their button, and stop at the monthly budg
   open; it runs at the next start if the PC was off. On Mac/Linux it prints a crontab line to add yourself. Remove it
   with `schedule remove`. Log: `data/scheduled-run.log`.
 
+### How pages are fetched
+
+- **Incremental re-crawl** (`incremental`, off by default): each page's ETag / Last-Modified is stored, and the next
+  audit sends them back. A page that answers 304 (unchanged) is copied from that audit with its links and text
+  (`data.reused304`) and goes through every check like a fetched page. Not reused: the start page, rendered pages,
+  redirected or fallback-fetched pages, and anything after a tool update or a change of user agent, rendering,
+  subdomains, robots.txt or request-header settings.
+- **Resume**: an audit you stopped, or one cut off by a crash or closing the app, can be continued with **Resume
+  audit** (`POST /api/audits/:id/resume`, newest audit only). Pages it already stored aren't fetched again; the queue
+  is rebuilt from their links and the sitemap, and every site-wide check runs again over all pages.
+
+- **JavaScript rendering** (`renderJs`: off, *auto* or every page): pages are rendered in headless Chrome as a 412 px
+  wide phone, like Googlebot smartphone: wait for network idle (capped at 10 s), scroll to the bottom a screen at a
+  time for lazy-loaded content, 45 s per page at most. Images, video and audio aren't downloaded and fonts are only
+  asked with HEAD (the DOM is the same). Each page gets a fresh browser context (no cookies carried over).
+  *Auto* renders the home page and the next 4 pages and compares them with their raw HTML: a page depends on JavaScript
+  when rendering at least doubles its text (to 50+ words) or its internal links (to 5+). If half or more of the sample
+  does, every page is rendered; otherwise only pages whose raw HTML is an empty app root (`#root`, `#app`, `#__next`,
+  `#__nuxt`, `<app-root>`…), asks to enable JavaScript on a short page, or has under 50 words with a large script
+  payload. The decision shows on the Overview. `renderConcurrency` (default 3, 1–8): pages rendered at a time in the
+  one shared browser. `renderUserAgent` (default: the audit's user agent): *Googlebot smartphone* is opt-in, for your
+  own sites only (firewalls that check Googlebot by IP block it); crawl requests always use the audit's user agent.
+
+- **Adaptive speed** (`maxConcurrency`, default 12): the crawl starts at *Parallel requests* and adds one at a time
+  while 10 answers in a row are fast and error-free, up to this maximum. A 429/503 halves it for the rest of the audit;
+  timeouts, dropped connections, retries, 502/504 drop it back to the start; answers twice as slow as at the start drop
+  it by one. A robots.txt `Crawl-delay` for `SEOAuditor` or `*` is always respected (one request at a time, that far
+  apart), also for the image and file checks. Set it equal to *Parallel requests* for a fixed speed.
+
+- **Character encodings**: a page is decoded as browsers do: byte order mark, then the Content-Type charset, then
+  `<meta charset>` in the first 1,024 bytes, else UTF-8 (windows-1252, Shift_JIS, GBK… read correctly).
+- **Size cap**: bodies are read as a stream and stop at 15 MB; `large_html` still sees the real size (over 2 MB).
+- **Flaky connections**: a reset, socket hang-up, connect timeout, DNS `EAI_AGAIN`, 502 or 504 is retried up to twice
+  (0.5 s, then 1.5 s); a page that still fails keeps its real error. Our own 20-second timeout isn't retried.
+- **Stateless, like Googlebot**: no cookies are kept between requests. When a redirect chain loops and the server set
+  cookies in it, the chain is repeated once with those cookies; if that reaches the page, `cookie_required_redirect`
+  (Google can't keep the cookie, so it sees the loop).
+- **JavaScript-only pages** (`js_only_routes`): the site's own scripts (up to 30, 3 MB each, read as text, never run)
+  and the home page's inline scripts are searched for route paths (`path: "/x"`, `href:`/`to:` props,
+  `navigate()`/`push()`/`replace()` calls). Up to 20 page-like paths that no crawled page links to and the sitemap
+  doesn't list are fetched once (robots.txt obeyed); those that answer with their own page are reported, not crawled.
+
 ## Link building (merged Backlink Verifier, 2026-10-22)
 
 The sidebar section **Link building** is the former Backlink Verifier app, now inside SEO Auditor:
