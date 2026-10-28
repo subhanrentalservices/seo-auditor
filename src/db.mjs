@@ -90,6 +90,9 @@ export const DEFAULT_SETTINGS = {
   napName: "",            // business listings: name, address and phone to check listings against
   napAddress: "",         // (empty = read from the home page's LocalBusiness JSON-LD)
   napPhone: "",
+  rankDropThreshold: 3,   // rank alerts: 7-day average position this many places worse than the week before (rank.mjs)
+  rankMinImpressions: 10, // rank alerts: impressions a keyword needs in each 7-day window to be judged
+  inspectPerDay: 0,       // scheduled URL Inspection: URLs per day (0 = off; capped at 1,800 of Google's 2,000 a day; index-rotation.mjs)
 };
 
 export const all = (sql, ...p) => db.prepare(sql).all(...p);

@@ -2,6 +2,8 @@
 // from its own location and never copied. Stores page totals, query×page rows and a daily trend per project (by device,
 // brand, and the top countries), search appearance per day (REQ-044 row 47), and on the same refresh updates the
 // cached Search Status Dashboard feed (status-feed.mjs, row 49). Findings from this data: gsc-findings.mjs.
+// gsc_queries is the last 28 days only (replaced on each refresh); the kept day-by-day history of searches, target
+// keywords, sitemaps and Discover/News are fetched by the afterRefresh steps (gsc-history.mjs, gsc-sitemaps.mjs, gsc-discover.mjs).
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -62,7 +64,8 @@ export async function detectProperty(startUrl, call = gsc) {
 }
 
 const iso = (d) => d.toISOString().slice(0, 10);
-async function query(property, body, max = 100000, call = gsc) {
+/** One Search Analytics query, paged 25,000 rows at a time up to `max` rows (final data only). */
+export async function query(property, body, max = 100000, call = gsc) {
   const rows = [];
   for (let startRow = 0; startRow < max; startRow += 25000) {
     const r = await call(`sites/${encodeURIComponent(property)}/searchAnalytics/query`, { ...body, rowLimit: 25000, startRow, dataState: "final" });
@@ -71,6 +74,10 @@ async function query(property, body, max = 100000, call = gsc) {
   }
   return rows;
 }
+
+// Extra steps run at the end of every refresh, after the core data is saved: [name, fn(project, {call, property, endDate})].
+// Other modules push here (query/keyword history, sitemaps, Discover and News); a failing step is reported, never thrown.
+export const afterRefresh = [];
 
 /** call: the Search Console request function (tests pass a mock); fetchFn: fetch for the Status Dashboard feed. */
 export async function refresh(project, { call = gsc, fetchFn } = {}) {
@@ -178,7 +185,9 @@ export async function refresh(project, { call = gsc, fetchFn } = {}) {
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `gsc:${project.id}`, JSON.stringify({ property, fetchedAt: new Date().toISOString(), ...range }));
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
-  return { property, pages: pages.length, queries: queries.length, days: daily.length, trendDays: Array.isArray(trend) ? trend[0].length : 0,
+  const extra = {};
+  for (const [name, fn] of afterRefresh) extra[name] = await fn(project, { call, property, endDate: iso(end) }).catch((e) => ({ error: e.message }));
+  return { extra, property, pages: pages.length, queries: queries.length, days: daily.length, trendDays: Array.isArray(trend) ? trend[0].length : 0,
     pageDayRows: Array.isArray(pageDaily) ? pageDaily.length : 0, countryRows: Array.isArray(countries) ? countries.length : 0,
     appearanceRows: Array.isArray(appearance) ? appearance.length : 0, statusFeed: { fetchedAt: feed.fetchedAt, error: feed.error } };
 }

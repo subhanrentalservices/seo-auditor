@@ -30,6 +30,8 @@ const SEO_ICONS = {
   visibility: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   keywords: '<path d="M4 7h16M4 12h10M4 17h13"/>',
+  rank: '<path d="M4 19h16"/><path d="M7 16V11M12 16V6M17 16v-3"/>',
+  explorer: '<path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/>',
   backlinks: '<path d="M9 15l6-6M7.5 11.5L5.6 13.4a3.5 3.5 0 005 5l1.9-1.9M16.5 12.5l1.9-1.9a3.5 3.5 0 00-5-5l-1.9 1.9"/>',
   history: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   report: '<path d="M6 3.5h12v17H6z"/><path d="M9 8h6M9 12h6M9 16h4"/>',

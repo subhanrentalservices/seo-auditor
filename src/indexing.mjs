@@ -61,6 +61,8 @@ export function targets(projectId) {
 
 const realInspect = (property) => (url) => gsc("https://searchconsole.googleapis.com/v1/urlInspection/index:inspect", { inspectionUrl: url, siteUrl: property });
 const running = new Set();
+/** Projects with an inspection run in progress (manual or scheduled, index-rotation.mjs): one at a time per project. */
+export const indexRunning = running;
 
 export async function startIndexRun(project, { inspect } = {}) {
   if (running.has(project.id)) throw Object.assign(new Error("An index status check is already running"), { status: 409 });
@@ -94,8 +96,13 @@ export async function startIndexRun(project, { inspect } = {}) {
       }
     };
     await Promise.all([worker(), worker(), worker()]);
-    // Pages no longer in the audit drop out of the list once a full run has replaced them.
-    if (!quota) run("DELETE FROM index_status WHERE project_id=? AND inspected_at < ?", project.id, started);
+    // Pages no longer in the latest audit drop out of the list once a run finishes (results for pages beyond this run's
+    // 500, e.g. from the scheduled rotation, are kept).
+    if (!quota) {
+      const keep = new Set(targets(project.id).map((t) => t.url));
+      for (const r of all("SELECT url FROM index_status WHERE project_id=? AND inspected_at < ?", project.id, started))
+        if (!keep.has(r.url)) run("DELETE FROM index_status WHERE project_id=? AND url=?", project.id, r.url);
+    }
     const counts = countKinds(all("SELECT coverage, verdict FROM index_status WHERE project_id=? AND wanted=1 AND error IS NULL", project.id).map((r) => classify(r.coverage, r.verdict)));
     run("UPDATE index_runs SET status=?, finished_at=datetime('now'), message=?, counts=? WHERE id=?", quota ? "stopped" : "done", quota, JSON.stringify(counts), runId);
     running.delete(project.id);

@@ -5,6 +5,7 @@ import { VIEWS, NAV, overviewCards, pageSections } from "./views.js";
 import "./views-data.js";
 import "./views-paid.js"; // after views-data: it anchors its nav entries to "search"
 import "./views-reclaim.js"; // after views-paid: "Lost pages" sits right below Search Console
+import "./views-rank.js"; // after views-reclaim: Rank tracker and GSC explorer sit right below Search Console; wraps VIEWS.search
 import "./views-ai.js";
 import "./views-report.js";
 import "./views-ideas.js";

@@ -47,7 +47,9 @@ Needs Node.js 22 or newer. After copying the folder to another PC, run `npm inst
 |---|---|---|
 | Issues, Pages, AI audit | Full crawl, 63 checks (18 errors, 21 warnings, 24 notices), Site Health and AI Readiness | Free |
 | Performance | Lighthouse (the PageSpeed Insights engine), mobile, on 5 pages after each audit | Free |
-| Search Console | Clicks, impressions, keywords, quick wins, pages competing for one query | Free |
+| Search Console | Clicks, impressions, keywords, quick wins, pages competing for one query; submitted sitemaps (errors, last read); Discover and Google News; scheduled URL Inspection within Google's 2,000-a-day limit (Search Console screen, off until you set a daily number) with a history of index-status changes | Free |
+| Rank tracker | Target keywords (Settings, up to 200) with tags: Search Console average position, clicks and impressions per day, best page, mobile vs desktop, change vs 7 and 28 days; rank drops, lost top 10 and new top 3. Day-by-day history kept for 16 months; each refresh fetches only new days | Free |
+| GSC explorer | Search Console performance live, filtered by search or page (contains or RE2 regex), country, device, type and dates, with CSV export | Free |
 | Keywords | Every keyword the domain ranks for in Google (DataForSEO) | ≈ $0.03 per refresh |
 | Backlinks | Backlinks, referring domains, anchors, spam review and a disavow file | ≈ $0.08 per refresh |
 | AI visibility | Your prompts on ChatGPT, Google AI Overviews, Google AI Mode, Perplexity and Gemini: are you mentioned, cited, and where do you rank? | ≈ $0.024 per prompt (all five) |
