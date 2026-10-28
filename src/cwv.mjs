@@ -137,7 +137,7 @@ export function register({ routes }) {
     if (!a) throw Object.assign(new Error("Audit not finished"), { status: 400 });
     if (busy) throw Object.assign(new Error("Lighthouse is already running"), { status: 409 });
     const project = get("SELECT * FROM projects WHERE id=?", a.project_id);
-    const n = Math.min(Math.max(Number(body.pages) || 5, 1), 50);
+    const n = Math.min(Math.max(Number(body.pages) || 5, 1), 10000); // more than the site has = every page
     busy = true;
     runCwv(a.id, project, JSON.parse(a.settings || "{}"), n).catch((e) => console.error("lighthouse:", e.message)).finally(() => { busy = false; phase(project.id, a.id, null); });
     return { started: true };

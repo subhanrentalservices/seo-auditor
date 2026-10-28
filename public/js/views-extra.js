@@ -28,7 +28,7 @@ VIEWS.performance = async (ctx) => {
   const aid = ctx.auditData.audit.id, base = ctx.project.start_url;
   const d = await api(`/api/audits/${aid}/cwv`);
   const T = d.thresholds, ok = d.rows.filter((r) => !r.error);
-  const pagesIn = h("input", { type: "number", min: 1, max: 50, value: ctx.project.settings.cwvPages || 5, style: { width: "70px" } });
+  const pagesIn = h("input", { type: "number", min: 1, max: 10000, value: ctx.project.settings.cwvPages || 5, style: { width: "70px" } });
   const rerun = h("button", { class: "btn", onclick: async () => {
     try { await api(`/api/audits/${aid}/cwv`, { method: "POST", body: { pages: Number(pagesIn.value) } }); toast("Lighthouse started — about 30 s per page"); rerun.disabled = true; poll(); }
     catch (e) { toast(e.message); }
