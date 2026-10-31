@@ -7,6 +7,7 @@ import { cleanRequestHeaders, saveRequestHeaders, maskHeaders } from "./request-
 import { FALLBACK_MODES } from "./fetch-ladder.mjs";
 import { renderModeOf, RENDER_UAS } from "./render-mode.mjs";
 import { cleanExtractRules, RULE_NAME } from "./extract.mjs";
+import { checkCatalog, checkCounts } from "./check-sources.mjs";
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const SEV_ORDER = { error: 0, warning: 1, notice: 2 };
@@ -227,4 +228,5 @@ export function exportCsv(auditId, kind) {
   fail(404, "Unknown export");
 }
 
-export const catalog = () => Object.entries(CHECKS).map(([id, [severity, title, why, fix]]) => ({ id, severity, title, why, fix }));
+/** Every check with severity, why, fix, group and its Google source (check-sources.mjs); ?counts=1 adds the totals. */
+export const catalog = (q = {}) => (q.counts ? { counts: checkCounts(), checks: checkCatalog() } : checkCatalog());

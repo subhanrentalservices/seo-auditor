@@ -27,7 +27,8 @@ export const routes = [
   ["GET", /^\/api\/audits\/(\d+)\/pages$/, ([id], q) => api.listPages(id, q)],
   ["GET", /^\/api\/audits\/(\d+)\/page$/, ([id], q) => api.getPage(id, q.url)],
   ["GET", /^\/api\/compare\/(\d+)\/(\d+)$/, ([a, b]) => api.compareAudits(a, b)],
-  ["GET", /^\/api\/checks$/, () => api.catalog()],
+  ["GET", /^\/api\/checks$/, (p, q) => api.catalog(q)],
+  ["GET", /^\/api\/modules$/, () => ({ total: MODULES.length, failed: moduleFailures })],
 ];
 // [path prefix, handler(req, res, url)] for modules that answer raw requests themselves (link building proxy).
 export const prefixes = [];
@@ -117,17 +118,32 @@ export function createServer() {
 
 // Modules loaded at start (each may export register({ routes, prefixes })). Order matters for after-audit steps: the
 // alerts run last, after Search Console has refreshed. scheduled-run.mjs loads the same list without the server.
-export const MODULES = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibility.mjs", "./report.mjs", "./scheduler.mjs", "./extras.mjs", "./desktop.mjs", "./backlinks.mjs", "./quality.mjs", "./page2.mjs", "./indexing.mjs", "./topics.mjs", "./citations.mjs", "./decay.mjs", "./queries.mjs", "./reclaim.mjs", "./linkgraph.mjs", "./trends.mjs", "./serpfeatures.mjs", "./changes.mjs",
+export const MODULES = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibility.mjs", "./visibility-plus.mjs", "./report.mjs", "./scheduler.mjs", "./extras.mjs", "./desktop.mjs", "./backlinks.mjs", "./quality.mjs", "./page2.mjs", "./indexing.mjs", "./topics.mjs", "./citations.mjs", "./decay.mjs", "./queries.mjs", "./reclaim.mjs", "./linkgraph.mjs", "./trends.mjs", "./serpfeatures.mjs", "./changes.mjs",
   "./gsc-history.mjs", "./rank.mjs", "./gsc-sitemaps.mjs", "./gsc-discover.mjs", "./index-rotation.mjs", "./gsc-explorer.mjs",
   "./issue-trends.mjs", "./alert-channels.mjs", "./task-schedule.mjs", "./report-delivery.mjs", "./page-compare.mjs", "./competitor-pages.mjs",
   "./kw-ideas.mjs", "./clusters.mjs", "./competitor-gap.mjs", "./content-inventory.mjs", "./content-brief.mjs", "./page-content.mjs",
   "./google-auth.mjs", "./ga4.mjs", "./bing.mjs", "./indexnow.mjs", "./alerts.mjs"]; // alerts last: it reads data the others refresh after an audit
 
 
+/** Imports each module and calls its register(ctx). A module that is missing or fails (also one whose own import is
+ *  missing, such as an uninstalled dependency) is logged and listed, and the others still load. Returns the failures. */
+export async function loadModules(list, ctx, log = console.error, load = (m) => import(m)) {
+  const failed = [];
+  for (const m of list) {
+    try { await (await load(m)).register?.(ctx); }
+    catch (e) {
+      const first = String(e?.message || e).split("\n")[0];
+      const reason = e?.code === "ERR_MODULE_NOT_FOUND" ? `not found (${first})` : first;
+      failed.push({ module: m, reason }); log(`module ${m} not loaded: ${reason}`);
+    }
+  }
+  return failed;
+}
+export const moduleFailures = []; // shown by GET /api/modules
+
 /** Load every module and listen on 127.0.0.1. Used by `node src/server.mjs` and by the desktop app. */
 export async function startServer() {
-
-  for (const m of MODULES) await import(m).then((x) => x.register?.({ routes, prefixes })).catch((e) => { if (e.code !== "ERR_MODULE_NOT_FOUND") console.error(m, e.message); });
+  moduleFailures.push(...await loadModules(MODULES, { routes, prefixes }));
   process.on("unhandledRejection", (e) => console.error("unhandled:", e?.stack || e));
   await new Promise((resolve, reject) => {
     const srv = createServer();

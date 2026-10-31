@@ -1,0 +1,32 @@
+# Tests and a syntax check on every push and pull request, on the Node.js versions the app supports (24 and newer).
+# Only runtime dependencies are installed: the tests don't need Electron or electron-builder. Tests that need a
+# browser start the Chrome that GitHub's Ubuntu image already has, or skip themselves when none starts. Nothing here
+# calls a paid API or any site other than the local test servers.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install
+        run: npm ci --omit=dev
+      - name: Syntax check (node --check on src, public, desktop, scripts, test)
+        run: npm run lint
+      - name: Tests
+        run: npm test

@@ -53,15 +53,27 @@ function launch(auditId, project, settings, deps = {}) {
     .then(async () => {
       emit({ type: "crawled", projectId, auditId });
       const a = get("SELECT status FROM audits WHERE id=?", auditId);
-      if (a?.status === "done") for (const hook of afterAudit) await hook(auditId, project, settings).catch((e) => console.error("after-audit:", e.message));
+      if (a?.status === "done") for (const hook of afterAudit) await Promise.resolve().then(() => hook(auditId, project, settings)).catch((e) => afterAuditFailed(auditId, hook, e));
       busy.delete(projectId);
       emit({ type: "done", projectId, auditId });
     })
     .catch((e) => { busy.delete(projectId); console.error(`audit ${auditId} failed:`, e.message); emit({ type: "failed", projectId, auditId, message: e.message }); });
 }
 
-/** Extra steps run after the crawl (CWV, Search Console, alerts). Each gets (auditId, project, settings). */
+/** Extra steps run after the crawl (CWV, Search Console, alerts). Each gets (auditId, project, settings); an optional
+ *  .label names it when it fails. */
 export const afterAudit = [];
+
+/** A failed after-audit step is logged and listed with the audit's skipped checks (site_info.skipped, Overview). */
+export function afterAuditFailed(auditId, hook, e) {
+  const reason = String(e?.message || e).split("\n")[0].slice(0, 200);
+  console.error("after-audit:", reason);
+  try {
+    const info = JSON.parse(get("SELECT site_info FROM audits WHERE id=?", auditId)?.site_info || "{}");
+    info.skipped = [...(info.skipped || []), { step: hook.label || "After-audit step", reason }];
+    run("UPDATE audits SET site_info=? WHERE id=?", JSON.stringify(info), auditId);
+  } catch (err) { console.error("after-audit:", err.message); }
+}
 
 export function stop(auditId) {
   if (isRunning(auditId)) stopAudit(auditId);

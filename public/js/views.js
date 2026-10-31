@@ -72,6 +72,7 @@ VIEWS.overview = async (ctx) => {
       h("div", { class: "card", title: "This tool's score, not a Google metric" }, meter(a.ai_readiness, "AI Readiness", pr?.ai_readiness !== null && pr?.ai_readiness !== undefined ? `${a.ai_readiness - pr.ai_readiness >= 0 ? "+" : ""}${a.ai_readiness - pr.ai_readiness}` : null, "tool score, not a Google metric")),
       h("div", { class: "card" }, stat("Pages crawled", a.pages_crawled, null, d("pages_crawled"), false), h("div", { class: "small muted" }, `${num(info.sitemapUrls)} in sitemap`)),
       h("div", { class: "card grid g3", style: { gap: "8px" } }, stat("Errors", a.errors, "error", d("errors")), stat("Warnings", a.warnings, "warning", d("warnings")), stat("Notices", a.notices, "notice", d("notices")))),
+    skippedCard(info.skipped),
     extra.length ? extra : null,
     h("div", { class: "grid g2" },
       h("div", { class: "card" }, h("div", { class: "card-h" }, h("h2", {}, "Top issues"), h("a", { href: `#/p/${ctx.project.id}/issues` }, "All issues →")),
@@ -94,6 +95,11 @@ VIEWS.overview = async (ctx) => {
   ];
 };
 export const overviewCards = []; // other modules add async (ctx) => element
+/** Check groups that failed in this audit (site_info.skipped): "not checked", never read as "passed". */
+export const skippedCard = (list) => list?.length ? h("div", { class: "card", role: "status" },
+  h("h2", {}, `Not checked in this audit (${list.length})`),
+  h("p", { class: "small muted" }, "These checks failed to run, so they raised no issues. That doesn't mean they passed. Run the audit again; if it repeats, the reason below says what to fix."),
+  h("ul", { class: "small", style: { margin: "6px 0 0 18px" } }, list.map((x) => h("li", {}, h("b", {}, x.step), ": skipped: ", x.reason)))) : null;
 
 // ---------- Issues ----------
 VIEWS.issues = async (ctx) => {

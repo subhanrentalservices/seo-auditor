@@ -1,226 +1,179 @@
 # SEO Auditor
 
-A Semrush-style SEO dashboard that runs on this PC. It crawls any website with no page limit, lists errors,
-warnings and notices per page, and adds Lighthouse speed tests, Google Search Console data, keywords,
-backlinks, an AI-search audit and AI visibility checks. Everything is stored locally in `data/`.
+An SEO audit and link-building app that runs on your own computer. It crawls a website with no page limit, raises
+errors, warnings and notices per page with why each matters and how to fix it, and adds Lighthouse, Chrome UX
+Report, Google Search Console, Google Analytics 4, Bing Webmaster Tools, paid DataForSEO data (keywords, backlinks,
+AI visibility) and a link-building workspace. Everything is stored locally in a SQLite database; the web app is
+served on `127.0.0.1` only.
 
-## Desktop app (Windows and macOS)
+## Requirements
 
-SEO Auditor and the Backlink Verifier are one app in the Backlink Verifier design (sidebar: **SEO audit** screens
-and **Link building** screens). The desktop version opens in its own window, runs the server and the link engine
-inside itself (no Node.js, Python or terminal needed) and keeps data in the user's app-data folder:
-Windows `%APPDATA%\SEO Auditor`, macOS `~/Library/Application Support/SEO Auditor`.
+- **Node.js 24 or newer** (`package.json` engines; the app uses `node:sqlite`).
+- **Google Chrome or Microsoft Edge** for JavaScript rendering, Lighthouse and PDF reports (or Playwright's Chromium:
+  `npx playwright install chromium`). Without a browser those parts are skipped and listed as not checked.
+- **Python 3.12+** only for the link-building engine (`backlinks/`).
 
-| Build | Command (in this folder) | Output | Where it must run |
+## Install and run
+
+```
+npm install
+npm start                      # http://localhost:4560 (SEO_AUDITOR_PORT changes the port)
+```
+
+- `node src/cli.mjs install [--autostart]` adds a desktop shortcut (and starts the app with Windows).
+- `scripts/stop.ps1` stops a background instance on Windows.
+- Data lives in `data/` (database, `config.json`, logs), or in the folder named by `SEO_AUDITOR_DATA`.
+
+### Desktop app (Windows and macOS)
+
+The desktop build opens in its own window, runs the server and the link engine inside itself (no Node.js, Python or
+terminal needed) and keeps data in the user's app-data folder (Windows `%APPDATA%\SEO Auditor`, macOS
+`~/Library/Application Support/SEO Auditor`).
+
+| Build | Command | Output | Runs on |
 |---|---|---|---|
 | Windows installer | `npm run dist:win` | `release\SEO Auditor Setup <version>.exe` | Windows |
-| macOS disk image (Intel + Apple silicon) | `npm run dist:mac` | `release/SEO Auditor-<version>-*.dmg` | a Mac (PyInstaller and Apple's tools only build Mac apps on macOS) |
+| macOS disk image (Intel + Apple silicon) | `npm run dist:mac` | `release/SEO Auditor-<version>-*.dmg` | a Mac |
 
-First-time setup on a build machine: `npm install`, then `backlinks/setup.bat` (Windows) or create
-`backlinks/.venv` with Python 3.12+ and `pip install -r backlinks/requirements.txt pyinstaller` (macOS).
-`npm run dist:*` builds the standalone link engine first (`backlinks/build-engine.py`).
-Builds are unsigned: Windows SmartScreen shows "More info → Run anyway"; on macOS right-click → Open the first time.
-Signing needs a code-signing certificate (Windows) or an Apple Developer ID (macOS).
-Lighthouse, JavaScript rendering and PDF reports use Google Chrome or Edge installed on the computer.
+First-time setup on a build machine: `npm install`, then `backlinks/setup.bat` (Windows) or create `backlinks/.venv`
+with Python 3.12+ and `pip install -r backlinks/requirements.txt pyinstaller` (macOS). Builds are unsigned: Windows
+SmartScreen shows "More info → Run anyway"; on macOS right-click → Open the first time.
 
-## Open it (developer setup)
+## Checks
 
-Double-click **SEO Auditor** on the desktop. It starts in the background and opens http://localhost:4560.
-Only this computer can reach it.
+<!-- generated:numbers (node scripts/readme-numbers.mjs) -->
+**189 checks**: 32 errors, 59 warnings, 98 notices.
 
-- To start it with Windows (needed for scheduled audits), tick **App settings → Run in the background**.
-- To stop it, run `scripts\stop.ps1` (right-click → Run with PowerShell).
-- If the shortcut is missing: `node src/cli.mjs install` in this folder.
+| Group | Checks |
+|---|---|
+| SEO (on-page, content, links, structured data, sitemaps, hreflang…) | 89 |
+| Crawlability (status codes, redirects, robots.txt, canonicals, rendering…) | 74 |
+| AI search (AI crawlers, answer-ready content; scored as AI Readiness) | 13 |
+| Core Web Vitals (field data first, Lighthouse as fallback) | 6 |
+| Security headers (information, not a Google ranking factor) | 4 |
+| Accessibility (information, not a Google ranking factor) | 3 |
 
-Needs Node.js 24 or newer (package.json engines). After copying the folder to another PC, run `npm install` and
-`npx playwright install chromium` once.
+132 checks link to the Google Search Central page on their topic; the rest are labelled in the app as tool heuristics, security or accessibility information.
 
-## Using it
+AI visibility costs about $0.024 per prompt with all 5 platforms (ChatGPT (web search) $0.004, Google: AI Overview + rankings $0.006, Google AI Mode $0.004, Perplexity (Sonar, web search) $0.006, Gemini $0.004). The default monthly DataForSEO budget is $2.00.
+<!-- /generated:numbers -->
 
-1. **All projects → Add website.** Check the project's Settings, then press **Run audit**.
-2. **Overview** shows Site Health, AI Readiness, the *Fix first* list and cards for every connected data source.
-3. **Issues** lists every check with why it matters, how to fix it, the affected URLs, and what is new or
-   fixed since the last audit. **Pages** lists every URL; click one for a Google preview and all details.
-4. **Report** gives a one-page HTML report or a PDF to share.
+The **All checks** screen lists every check with its severity, why it matters, how to fix it and its source, with
+search and filters (also `GET /api/checks`). A check group that fails to run during an audit (no browser, a network
+error) raises nothing and is listed on the Overview under **Not checked in this audit** with the reason, so "not
+checked" is never shown as "passed".
 
-| Screen | What it does | Cost |
+### Scores (this tool's scores, not Google metrics)
+
+- **Site Health** = 100 × (1 − (pages with errors + ½ × pages with only warnings) ÷ pages crawled).
+- **AI Readiness**: each indexable page starts at 100 and loses points for AI-search issues (errors 10, warnings 4,
+  notices 1, ×3, capped). Each AI search crawler blocked in robots.txt costs 15 points; training opt-outs cost nothing.
+- **Fix first** = severity × (1 + log₂(1 + pages affected)) × (1 + log₁₀(1 + Google impressions of those pages)); AI
+  issues count half.
+
+## Screens
+
+Add a website under **All websites**, check its **Audit settings**, then press **Run audit**.
+
+| Screen | What it shows | Cost |
 |---|---|---|
-| Issues, Pages, AI audit | Full crawl, 63 checks (18 errors, 21 warnings, 24 notices), Site Health and AI Readiness | Free |
-| Performance | Lighthouse (the PageSpeed Insights engine), mobile, on 5 pages after each audit | Free |
-| Search Console | Clicks, impressions, keywords, quick wins, pages competing for one query; submitted sitemaps (errors, last read); Discover and Google News; scheduled URL Inspection within Google's 2,000-a-day limit (Search Console screen, off until you set a daily number) with a history of index-status changes | Free |
-| Rank tracker | Target keywords (Settings, up to 200) with tags: Search Console average position, clicks and impressions per day, best page, mobile vs desktop, change vs 7 and 28 days; rank drops, lost top 10 and new top 3. Day-by-day history kept for 16 months; each refresh fetches only new days | Free |
-| GSC explorer | Search Console performance live, filtered by search or page (contains or RE2 regex), country, device, type and dates, with CSV export | Free |
-| Analytics | Google Analytics 4 (Data API): organic sessions, engaged sessions and key events (conversions) by landing page, a 90-day organic trend (kept), key events per page, and visits referred by ChatGPT, Perplexity, Gemini, Copilot and Claude by landing page. Set the GA4 Property ID on the screen; refreshed after each audit (at most every 12 hours) | Free |
-| Bing | Bing Webmaster Tools API: clicks and impressions per day, top searches and pages (impression-weighted position), crawl stats, crawl issues (redirects, 4xx/5xx, robots.txt blocks, DNS, timeouts), inbound link counts and a sample of linking pages. IndexNow: submit pages new or changed since the previous audit (prefilled), only on the site's exact host, with a key-file check | Free |
+| Overview | Site Health, AI Readiness, errors/warnings/notices with change since the last audit, Fix first, checks not run, trend, crawl depth, HTTP statuses, site files, cards from connected data | Free |
+| Issues | Every issue with why, fix, affected URLs, new and fixed since the last audit; Crawlability tab with passed checks; CSV, Markdown and JSONL exports | Free |
+| All checks | Every check the audit can raise, with severity, why, fix and Google source | Free |
+| Pages | Every URL with status, depth, links, words, issues, Search Console numbers and custom extraction columns; click one for a Google preview and all details | Free |
+| Link ideas | Internal link ideas, pages close to page 1, topic clusters (hub and spoke) | Free |
+| Competitors | Pages a competitor has that you don't (from their sitemap), and your page vs theirs for one search | Free |
+| Research | Keyword ideas from Google Autocomplete, search clusters from Search Console, topics up to 5 competitors cover that you don't; content briefs | Free; brief ≈ $0.002, volumes ≈ $0.01 + $0.0001 per idea |
+| Content inventory | Every indexable page with words, last modified, clicks and impressions trend, links in, decay and a suggested action (keep, refresh, merge, prune or noindex) | Free |
+| AI audit | AI crawler access in robots.txt and at the server, llms.txt, AI-search page issues, robots.txt tester | Free |
+| Performance | Lighthouse (mobile, optionally desktop) on `cwvPages` pages per audit (default 5); Chrome UX Report field data and its 25-week history with a free CrUX API key | Free |
+| AI visibility | Your prompts on ChatGPT, Google AI Overviews, Google AI Mode, Perplexity and Gemini: mentioned, cited, rank, cited sources, share of voice; a trend per prompt and share of voice over time; your pages AI cites, and your closest page for prompts others win; prompt ideas from Search Console question searches (free); optional scheduled runs every 7, 14 or 30 days (off by default, each checked against the budget first, only while the app runs) | Paid per run (see Checks above) |
+| Search Console | Clicks, impressions, queries, quick wins, pages competing for one query, sitemaps, Discover and News, scheduled URL Inspection (within Google's 2,000 a day) with index-status history | Free |
+| Rank tracker | Target keywords (Audit settings, up to 200) with tags: position, clicks, impressions per day, best page, mobile vs desktop, change vs 7 and 28 days; 16 months of history | Free |
+| GSC explorer | Search Console performance filtered by query or page (contains or regex), country, device, type and dates, with CSV export | Free |
+| Analytics | GA4: organic sessions and key events by landing page, 90-day organic trend, visits referred by AI assistants | Free |
+| Bing | Bing Webmaster Tools: traffic, top searches and pages, crawl stats and issues, inbound links; IndexNow submit | Free |
+| Lost pages | Gone or wrongly redirected URLs that had value, each with the closest live page as a 301 target | Free |
 | Keywords | Every keyword the domain ranks for in Google (DataForSEO) | ≈ $0.03 per refresh |
-| Research | Keyword ideas from Google Autocomplete (seeded from target keywords and top Search Console searches; volumes only on a paid button), search clusters by shared ranking pages and words with gaps, and topics up to 5 saved competitors cover that you don't (their sitemaps plus the title/H1 of up to 50 robots-allowed pages each). Free reads go through a polite reader: robots.txt obeyed, one request at a time per site, the tool's own user agent, 7-day cache | Free (volumes ≈ $0.01 + $0.0001 per idea) |
-| Content brief | For one topic: the top 10 Google results, People Also Ask and related searches (DataForSEO), the top pages' H2/H3 headings merged, and your own searches on the topic. Outline only | ≈ $0.002 per brief |
-| Content inventory | Every indexable page with words, last modified, clicks and impressions trend, links in and decay, and a suggested action (keep, refresh, merge into X, prune or noindex) with the reason; CSV | Free |
-| Backlinks | Backlinks, referring domains, anchors, spam review and a disavow file | ≈ $0.08 per refresh |
-| AI visibility | Your prompts on ChatGPT, Google AI Overviews, Google AI Mode, Perplexity and Gemini: are you mentioned, cited, and where do you rank? | ≈ $0.024 per prompt (all five) |
+| Backlinks | Backlinks, referring domains, anchors, spam review and a disavow file (DataForSEO) | ≈ $0.08 per refresh |
+| Business listings | Directory pages that list the business, checked against the site's name, address and phone | Free |
+| History & compare | Every audit; compare two audits (issues added and fixed, pages new and lost) | Free |
+| Issue trends | Each issue's page count across audits; Site Health and AI Readiness over time | Free |
+| Report | One-page HTML report or PDF, with optional branding | Free |
+| Alerts | Alert rules per website, scheduled report delivery, report branding | Free |
+| Audit settings | Crawl limits, speed, robots.txt, rendering, fallbacks, request headers, custom extraction, schedule, Search Console property, brand terms, target keywords, competitors | – |
+| App settings | Accounts and keys, DataForSEO budget, alert channels, scheduled task, run in the background | – |
 
-Paid requests run only when you press their button, and stop at the monthly budget in **App settings**
-(default $2).
+Paid requests run only when you press their button (or turn on a paid schedule yourself), and stop at the monthly
+DataForSEO budget in **App settings**. Prices are DataForSEO's at the time of writing; the app logs the real cost
+of every call.
 
-### Pages that refuse the crawler, and your own site's access
+### Link building
 
-- **Pages that refuse the crawler** (project setting `blockedFallback`, default *curl, then a real browser*): a page
-  that answers 401/403/503, no answer, or a bot challenge (Cloudflare, Akamai, captcha…) is read again with curl,
-  then in Chrome (at most 50 pages per audit). A 429, or a 503 with Retry-After, is waited out instead (up to 60 s,
-  3 minutes per audit), retried once, and the crawl drops to fewer parallel requests; it is never escalated. robots.txt
-  is obeyed by every step; every step sends the audit's own user agent (nothing is disguised), and no challenge is solved. *Off*
-  keeps the plain fetch only. Checks: `bot_wall_blocked`, `fetched_via_fallback`, `crawl_rate_limited`. Pages read
-  through a fallback have no response time (speed checks skip them) and aren't JavaScript-rendered.
-- **Request headers (own site)** (`requestHeaders`, up to 10): e.g. `Authorization: Basic …` for a staging site or a
-  bypass cookie (`Cookie: name=value`) your firewall issued. Sent only to the project's own hosts (never to external
-  links or other hosts, also not after a redirect) on page, robots.txt and own-file requests. The browser fallback
-  sends cookies and Basic authentication only. Values are stored in the local database, outside the settings; the
-  app never shows them again, never logs them, and keeps them out of audits and exports. Host, Content-Length,
-  Connection, User-Agent, Sec-*, Proxy-* and forwarding headers can't be set.
-
-## Alerts, trends and scheduled reports
-
-- **Channels** (App settings → Alerts): email over your own SMTP server, a webhook (JSON POST), a Slack-compatible
-  incoming webhook and the Windows desktop alert, each with **Send test**. At most N sends per channel per hour
-  (default 10); the same alert is sent once per period. The SMTP password and webhook addresses are stored only in
-  `data/config.json`, never shown again and removed from error messages.
-- **Rules** (each website → Alerts, each on/off): after an audit — new errors, Site Health drop (default 3 points),
-  robots.txt changed, pages turned non-indexable, new 5xx; from stored data — Search Console clicks or impressions
-  down week on week (default 30%, with minimums so small sites don't alert on noise), more pages not indexed between
-  two Index status runs, and rank drops from the rank tracker (skipped until its data exists). One message per check.
-- **Issue trends**: every issue's page count across audits; Site Health and AI Readiness over time (also on Overview).
-- **Scheduled report**: the report emailed (PDF or HTML) or saved to a folder, weekly or monthly per website.
-  **Report branding**: logo, name and colours app-wide or per website; *white label* replaces the SEO Auditor credit.
-- **When the app is closed**: schedules, alert checks and report emails only run while SEO Auditor runs. App settings
-  → *Scheduled task* (or `node src/cli.mjs schedule install --time 06:00`) adds an optional daily Windows task,
-  "SEO Auditor scheduled run", that runs due audits, then alerts and due reports, and does nothing while the app is
-  open; it runs at the next start if the PC was off. On Mac/Linux it prints a crontab line to add yourself. Remove it
-  with `schedule remove`. Log: `data/scheduled-run.log`.
-
-### How pages are fetched
-
-- **Incremental re-crawl** (`incremental`, off by default): each page's ETag / Last-Modified is stored, and the next
-  audit sends them back. A page that answers 304 (unchanged) is copied from that audit with its links and text
-  (`data.reused304`) and goes through every check like a fetched page. Not reused: the start page, rendered pages,
-  redirected or fallback-fetched pages, and anything after a tool update or a change of user agent, rendering,
-  subdomains, robots.txt or request-header settings.
-- **Resume**: an audit you stopped, or one cut off by a crash or closing the app, can be continued with **Resume
-  audit** (`POST /api/audits/:id/resume`, newest audit only). Pages it already stored aren't fetched again; the queue
-  is rebuilt from their links and the sitemap, and every site-wide check runs again over all pages.
-
-- **JavaScript rendering** (`renderJs`: off, *auto* or every page): pages are rendered in headless Chrome as a 412 px
-  wide phone, like Googlebot smartphone: wait for network idle (capped at 10 s), scroll to the bottom a screen at a
-  time for lazy-loaded content, 45 s per page at most. Images, video and audio aren't downloaded and fonts are only
-  asked with HEAD (the DOM is the same). Each page gets a fresh browser context (no cookies carried over).
-  *Auto* renders the home page and the next 4 pages and compares them with their raw HTML: a page depends on JavaScript
-  when rendering at least doubles its text (to 50+ words) or its internal links (to 5+). If half or more of the sample
-  does, every page is rendered; otherwise only pages whose raw HTML is an empty app root (`#root`, `#app`, `#__next`,
-  `#__nuxt`, `<app-root>`…), asks to enable JavaScript on a short page, or has under 50 words with a large script
-  payload. The decision shows on the Overview. `renderConcurrency` (default 3, 1–8): pages rendered at a time in the
-  one shared browser. `renderUserAgent` (default: the audit's user agent): *Googlebot smartphone* is opt-in, for your
-  own sites only (firewalls that check Googlebot by IP block it); crawl requests always use the audit's user agent.
-
-- **Adaptive speed** (`maxConcurrency`, default 12): the crawl starts at *Parallel requests* and adds one at a time
-  while 10 answers in a row are fast and error-free, up to this maximum. A 429/503 halves it for the rest of the audit;
-  timeouts, dropped connections, retries, 502/504 drop it back to the start; answers twice as slow as at the start drop
-  it by one. A robots.txt `Crawl-delay` for `SEOAuditor` or `*` is always respected (one request at a time, that far
-  apart), also for the image and file checks. Set it equal to *Parallel requests* for a fixed speed.
-
-- **Character encodings**: a page is decoded as browsers do: byte order mark, then the Content-Type charset, then
-  `<meta charset>` in the first 1,024 bytes, else UTF-8 (windows-1252, Shift_JIS, GBK… read correctly).
-- **Size cap**: bodies are read as a stream and stop at 15 MB; `large_html` still sees the real size (over 2 MB).
-- **Flaky connections**: a reset, socket hang-up, connect timeout, DNS `EAI_AGAIN`, 502 or 504 is retried up to twice
-  (0.5 s, then 1.5 s); a page that still fails keeps its real error. Our own 20-second timeout isn't retried.
-- **Stateless, like Googlebot**: no cookies are kept between requests. When a redirect chain loops and the server set
-  cookies in it, the chain is repeated once with those cookies; if that reaches the page, `cookie_required_redirect`
-  (Google can't keep the cookie, so it sees the loop).
-- **JavaScript-only pages** (`js_only_routes`): the site's own scripts (up to 30, 3 MB each, read as text, never run)
-  and the home page's inline scripts are searched for route paths (`path: "/x"`, `href:`/`to:` props,
-  `navigate()`/`push()`/`replace()` calls). Up to 20 page-like paths that no crawled page links to and the sitemap
-  doesn't list are fetched once (robots.txt obeyed); those that answer with their own page are reported, not crawled.
-
-### Content for AI tools and exports
-
-- **Markdown and JSONL exports** (Issues screen: *Export Markdown*, *Export JSONL*; `GET /api/audits/:id/export/markdown`
-  and `/export/jsonl`): each indexable page's main content as Markdown (headings, paragraphs, lists, tables, links, code,
-  quotes, image alt text; menus, headers, footers, sidebars, forms' controls, hidden parts and cookie banners left out,
-  using the crawler's main-content detection: `<main>` when the page has one). The JSONL has one object per crawled page:
-  url, final_url, status, content type, title, description, h1, canonical, lang, words, indexable, JSON-LD blocks,
-  Markdown and extracted values. Stored per audit, at most 100 KB of Markdown and 64 KB of JSON-LD per page (300 MB per
-  audit); downloads are streamed. Exports hold only what the pages publish: never request headers, cookies or keys (a
-  page that echoes a saved header value gets `[hidden]`).
-- **Custom extraction** (Settings → *Custom extraction*, setting `extract`, up to 20 rules): pull one value from every
-  HTML page, like Screaming Frog. *CSS*: a selector on the page as crawled (the rendered page when rendering is on),
-  giving its text (up to 10 matches joined by ` | `), inner HTML, an attribute, or the number of matches. *Regex*: a
-  JavaScript regular expression (flags i, m, s, u) on the raw HTML; the value is the first group or the whole match.
-  Values (500 characters max) are Pages columns you can sort and filter (contains / has a value / is empty), and go
-  into the pages CSV (`extract: <name>` columns) and the JSONL export. Patterns over 200 characters or with nested
-  quantifiers like `(a+)+` are refused; only the first 2 MB of a page is searched, each search stops after 100 ms, and
-  a rule that times out is skipped for the rest of the audit (`data.extractErrors`).
-- **PDFs** (`maxPdfs`, default 50 per audit, 0 = off; `maxPdfMb`, default 20, 1–64): Google indexes PDFs, so the
-  site's own PDFs (linked from its pages, or in its sitemap) are fetched on its own hosts only, robots.txt obeyed,
-  with the audit's user agent, and stored as pages of type `application/pdf`: title (the document's Title property;
-  "Microsoft Word - x.docx"-style defaults count as missing), first line of text (H1 column), text, words, page count,
-  language. Checks: broken (4xx/5xx, `broken_internal_link` to it), `missing_title`, `low_word_count` (none = scanned
-  pages without a text layer), `dup_title`, `dup_content`, `near_duplicate`, and `pdf_unreadable` (damaged, encrypted
-  or over the size limit). Their text goes into the Markdown and JSONL exports. Read in-process with
-  [unpdf](https://github.com/unjs/unpdf) (MIT, a server build of Mozilla's pdf.js, Apache-2.0): no service, font
-  eval off, 20 s and 300 text pages per file.
-
-## Link building (merged Backlink Verifier, 2026-10-22)
-
-The sidebar section **Link building** is the former Backlink Verifier app, now inside SEO Auditor:
+The **Link building** section of the sidebar is a separate engine (Python, `backlinks/`) that the app starts on
+`127.0.0.1:4561` and reaches through `/lv/`.
 
 | Screen | What it does |
 |---|---|
-| Today | Where your links stand in one line, then what to do next, most urgent first |
-| Won links | Every page that links to you, verified with 15 checks (Counts / Weak / Pending / Not counted), re-checked weekly then monthly, with history and a screenshot |
-| Opportunities | Free listings, competitor partners, unlinked mentions, journalist requests, scored best first; writes outreach drafts you send yourself |
-| Data studies | Who quotes a data study you published, and whether they link to it |
-| Link map | Your own site's internal link graph: broken links, orphan pages, address problems |
-| Link settings | Brand, competitors, topics, free sources, notifications, daily run |
+| Today | Where your links stand in one line, then what to do next |
+| Links | Every page that links to you, verified (counts, weak, pending, not counted), re-checked over time with history and a screenshot |
+| Opportunities | Places that could link to you, best first, with an outreach draft for each that you send yourself |
+| Campaigns | Who writes about a data study you published, and whether they link |
+| Site health | Whether your own site passes links on (noindex, canonicals, duplicates, thin pages) |
+| Link settings | Brand, competitors, topics, sources, notifications, daily run |
 
-It never posts, comments, signs up or sends email anywhere: you do the outreach, it finds and proves.
-
-How it runs: the engine is Python (`backlinks/`). SEO Auditor starts it in the background on 127.0.0.1:4561 and the
-screens reach it through `/lv/` on port 4560. One-time setup on a new PC: run `backlinks\setup.bat` (needs Python
-3.12+). Its data (links, opportunities, settings) lives in `backlinks/config.toml` and `backlinks/sites/` (not in git).
-The optional daily re-check is the Windows task "BacklinkVerifier Monitor" (Link settings → Daily run). Engine log:
-`data/backlinks.log`. Engine tests: `.venv\Scripts\python -m pytest` inside `backlinks/`.
-
-## Scores
-
-- **Site Health** = 100 × (1 − (pages with errors + ½ × pages with only warnings) ÷ pages crawled).
-- **AI Readiness**: each indexable page starts at 100 and loses points for AI-search issues (errors 10,
-  warnings 4, notices 1, ×3, capped). Each AI crawler blocked in robots.txt costs 15 points.
-- **Fix first** = severity × (1 + log₂(1 + pages affected)) × (1 + log₁₀(1 + Google impressions of those pages)); AI issues count half.
+It never posts, comments, signs up or sends email anywhere. One-time setup: `backlinks\setup.bat` (Python 3.12+).
+Engine tests: `.venv\Scripts\python -m pytest` inside `backlinks/`.
 
 ## Accounts
 
-- **Search Console** uses a Google service-account key file: set its path in App settings (default
-  `~/.config/claude-seo/gsc-service-account.json`, or the `GSC_KEY_FILE` environment variable). Add the
-  service account's email as a user on each property in Search Console.
-- **Google sign-in** (instead of the key file, for Search Console and GA4): create an OAuth client of type
-  “Desktop app” in Google Cloud console (enable the Search Console API and the Google Analytics Data API; on the
-  OAuth consent screen add yourself as a test user or publish the app, since Google ends test-mode sign-ins after 7
-  days), paste its ID and secret in App settings → Google sign-in, and press “Sign in with Google”. The sign-in runs
-  in your browser and returns to a one-off listener on 127.0.0.1 (state check, PKCE, 5 minutes). Read-only scopes.
-  The client secret and the refresh token are stored only in `data/config.json`, never shown again and removed from
-  error messages. Sign out (or switch back) to use the key file again.
-- **Google Analytics 4** uses the same sign-in as Search Console (the key file, or `ga4KeyFile` in config.json for a
-  different one, or Google sign-in). Enable the Google Analytics Data API in the key's Google Cloud project and add the
-  service account's email (or your signed-in account) as a Viewer in GA4 Admin → Property access management. AI
-  visits without a referrer show as Direct in GA4, so the AI referral numbers are a lower bound.
-- **Bing Webmaster Tools** uses an API key (Bing Webmaster Tools → Settings → API access), saved in App settings:
-  write-only, stored only in `data/config.json`, removed from every error. The site is matched by its address, or set
-  it on the Bing screen exactly as Bing lists it. **IndexNow** needs a key you choose (set on the Bing screen) and a
-  file `<key>.txt` holding only that key in the site's root folder; uploading it is your job, the screen checks it.
-- **DataForSEO** uses the login entered in App settings, or an `.mcp.json` file whose `dataforseo` server holds
-  the login (App settings, or `DATAFORSEO_MCP_CONFIG`). Keys are read where they are and never copied.
+All optional. Keys and passwords are stored only in `data/config.json`, never shown again by the app, and removed
+from error messages.
 
-## Licence
+- **Google Search Console**: either a service-account key file (path in App settings or `GSC_KEY_FILE`; add the
+  service account's email as a user on each property), or **Google sign-in**: create an OAuth client of type
+  "Desktop app" in Google Cloud console (enable the Search Console API and the Google Analytics Data API; add yourself
+  as a test user or publish the app, since Google ends test-mode sign-ins after 7 days), paste its ID and secret in
+  App settings and press "Sign in with Google". Read-only scopes; the sign-in returns to a one-off listener on
+  127.0.0.1 (state check, PKCE, 5 minutes).
+- **Google Analytics 4**: the same key file (or `ga4KeyFile` in config.json) or the same Google sign-in; add the
+  account as a Viewer on the GA4 property and set the Property ID on the Analytics screen. AI visits without a
+  referrer show as Direct in GA4, so the AI referral numbers are a lower bound.
+- **Bing Webmaster Tools**: an API key (Bing Webmaster Tools → Settings → API access) in App settings. **IndexNow**
+  needs a key you choose and a `<key>.txt` file in the site's root holding it; uploading it is your job.
+- **Chrome UX Report**: a free Google API key in App settings, for field data and its history.
+- **DataForSEO** (paid): the login in App settings, or an `.mcp.json` file whose `dataforseo` server holds it (App
+  settings or `DATAFORSEO_MCP_CONFIG`). Every call's real cost is logged; nothing paid runs past the monthly budget.
 
-MIT. See [LICENSE](LICENSE).
+## Alerts, schedules and reports
+
+- **Channels** (App settings → Alerts): email over your SMTP server, a webhook (JSON POST), a Slack-compatible
+  incoming webhook and the Windows desktop alert, each with **Send test**; rate-limited and deduplicated.
+- **Rules** (each website → Alerts, each on/off): new errors, Site Health drop, robots.txt changed, pages turned
+  non-indexable, new 5xx, Search Console clicks or impressions down week on week, more pages not indexed, rank drops.
+- **Scheduled audits** (Audit settings → schedule: daily or weekly) and **scheduled reports** (emailed as PDF or HTML,
+  or saved to a folder) run while the app runs. App settings → *Scheduled task* (or
+  `node src/cli.mjs schedule install --time 06:00`) adds an optional daily Windows task that runs due audits, alerts
+  and reports when the app is closed; on Mac/Linux it prints a crontab line. Log: `data/scheduled-run.log`.
+
+## How pages are fetched
+
+- **Crawl**: robots.txt obeyed (`respectRobots`), the audit's own user agent, adaptive speed from `concurrency` up to
+  `maxConcurrency` while the site answers fast, `Crawl-delay` respected, transient errors retried, bodies capped at
+  15 MB, encodings decoded like browsers, no cookies kept between requests (like Googlebot).
+- **Pages that refuse the crawler** (`blockedFallback`): 401/403/503, no answer or a bot challenge are read again with
+  curl, then in Chrome (at most 50 pages); a 429 is waited out, never escalated. Nothing is disguised and no challenge
+  is solved.
+- **JavaScript rendering** (`renderJs`: off, *auto* or every page): headless Chrome as a 412 px wide phone; *auto*
+  renders a sample and decides. Routes only the site's own scripts navigate to are reported.
+- **Incremental re-crawl** (`incremental`) sends the last audit's ETag / Last-Modified; **Resume audit** continues a
+  stopped or interrupted audit without fetching its stored pages again.
+- **Request headers** (`requestHeaders`, own hosts only) for staging sites or firewall bypass cookies; values are kept
+  out of settings, audits, logs and exports.
+- **PDFs** (`maxPdfs`, `maxPdfMb`): the site's own PDFs are read in-process with unpdf and checked like pages.
+- **Custom extraction** (`extract`, up to 20 CSS or regex rules) adds columns to Pages and the exports.
+- **Exports**: issues, pages and links CSV; each indexable page's main content as Markdown; one JSON object per page
+  (JSONL). Exports never contain request headers, cookies or keys.
 
 ## Command line
 
@@ -233,8 +186,22 @@ node src/cli.mjs schedule install [--time 06:00]     # optional daily task: audi
 node src/scheduled-run.mjs [--data <folder>]         # what that task runs (does nothing while the app is open)
 ```
 
-## Files
+## Development
 
-`src/` server and modules (crawler, checks, AI checks, Lighthouse, Search Console, DataForSEO, AI visibility,
-report, scheduler) · `public/` the web app (no build step) · `scripts/` launch, stop, icon ·
-`data/` database, settings and logs (not in git) · `PLAN.md` design and task log.
+```
+npm test                              # node:test suite: local test servers only, no paid calls
+npm run lint                          # node --check on every JavaScript file
+node scripts/readme-numbers.mjs       # refresh the numbers in this README from the code (the tests check them)
+node scripts/api-docs.mjs             # regenerate docs/api.md from the registered routes (the tests check it)
+```
+
+The local JSON API (every route with its parameters) is documented in [docs/api.md](docs/api.md).
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the lint and the tests on Node.js 24 and 26 for every push and pull
+request. The end-to-end test audits a small fixture website served on 127.0.0.1; its JavaScript-rendering part is
+skipped when no browser can start. Layout: `src/` server and modules, `public/` the web app (plain DOM, no build
+step), `test/` tests, `desktop/` the Electron shell, `backlinks/` the link engine, `scripts/` helpers.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

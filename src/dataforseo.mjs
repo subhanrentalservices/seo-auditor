@@ -39,7 +39,8 @@ function login() {
 }
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 export const dfsConfigured = () => Boolean(login());
-export const budget = () => Number(config().dfsMonthlyBudget ?? 2);
+export const DEFAULT_BUDGET = 2; // US$ per calendar month, until the owner sets another in App settings
+export const budget = () => Number(config().dfsMonthlyBudget ?? DEFAULT_BUDGET);
 export const spentThisMonth = () => get("SELECT COALESCE(SUM(cost),0) s FROM dfs_costs WHERE ts >= strftime('%Y-%m-01','now')").s;
 
 export async function dfs(endpoint, body, projectId, method = "POST") {

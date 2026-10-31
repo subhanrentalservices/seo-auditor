@@ -35,6 +35,7 @@ import { domFacts, securityHeaders } from "./extra-checks.mjs";
 import { createContentStore } from "./page-content.mjs";
 import { createExtractor } from "./extract.mjs";
 import { createPdfs, isPdfType } from "./pdf.mjs";
+import { createSkips } from "./skipped.mjs";
 export { rawRenderedDiff, normalize };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser (BROWSER_UA,
@@ -391,6 +392,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const content = createContentStore({ auditId, redact: (s) => redact(s, own), reuseFrom: reuse.auditId }); // Markdown + JSON-LD of indexable pages
     const extractor = createExtractor(settings.extract, { redact: (s) => redact(s, own) }); // custom extraction rules (extract.mjs)
     const pdfs = createPdfs(settings); // the site's own PDFs: linked ones fetched too, count and size capped (pdf.mjs)
+    const skips = createSkips({ redact: (x) => redact(x, own) }); // check groups that failed: shown as "not checked" (skipped.mjs)
     const robotsRes = await fetchFollow(origin + "/robots.txt", ua, extraFor);
     const robotsTxt = robotsRes.status === 200 ? robotsRes.body : "";
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
@@ -573,7 +575,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
       try {
         if (!b) { const { launchChromium } = await import("./browser.mjs"); b = await launchChromium(); }
         await pool(3, refused, async (u) => { const s = await browserStatus(b, u); if (s && s < 400) extStatus.set(u, s); }, () => ctl.stop);
-      } catch { /* no browser on this computer: keep the refused status */ }
+      } catch (e) { skips.note("Browser re-check of refused external links", e); /* keep the refused status */ }
       finally { if (b && b !== browser) await b.close().catch(() => {}); }
     }
     const sOf = (u) => statusOf.get(u) ?? imgStatus.get(u) ?? resStatus.get(u) ?? extStatus.get(u);
@@ -618,36 +620,36 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const near = similarForAudit(auditId, { min: 0.5 }).filter((x) => cluster(x.a) !== cluster(x.b));
     const access = ctl.stop ? null : await crawlerAccess(start, ua);
     const keep = {}; // crawlabilitySiteIssues keeps the 404 probe's response here (soft_404_content compares texts)
-    const crawlSite = ctl.stop ? [] : await crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua, keep }).catch(() => []);
+    const crawlSite = ctl.stop ? [] : await skips.guard("Crawlability site checks (robots.txt, soft 404, host variants)", () => crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robots, ua, keep }), []);
     const notFoundHash = keep.notFound?.body ? textFingerprint(parseHtml(keep.notFound.body, keep.notFound.url).text) : null;
     // Robots-blocked URLs the site links to or lists, fetched once each: a noindex there is invisible to Google.
-    const blockedChecks = ctl.stop || !settings.respectRobots || settings.auditBlockedUrls !== true ? [] : await robotsBlockedIssues(pages, { ua }).catch(() => []);
+    const blockedChecks = ctl.stop || !settings.respectRobots || settings.auditBlockedUrls !== true ? [] : await skips.guard("Robots-blocked URL checks", () => robotsBlockedIssues(pages, { ua }), []);
     const robotsChanges = robotsChangeIssues(project.id, auditId, robotsRes.status, robotsTxt, origin);
-    const favicon = ctl.stop || !home ? [] : await faviconIssues({ start: home.url, html: home.html, robotsTxt, ua }).catch(() => []);
+    const favicon = ctl.stop || !home ? [] : await skips.guard("Favicon check", () => faviconIssues({ start: home.url, html: home.html, robotsTxt, ua }), []);
     const scripts = {}; // scriptTrapIssues keeps the scripts' source map URLs here
-    const homeScripts = ctl.stop || !home ? [] : await scriptTrapIssues({ start: home.url, html: home.html, ua, keep: scripts }).catch(() => []);
+    const homeScripts = ctl.stop || !home ? [] : await skips.guard("Home page script checks", () => scriptTrapIssues({ start: home.url, html: home.html, ua, keep: scripts }), []);
     // Extra probes (up to 60 sequential requests, setting siteProbes): search pages, smartphone/Googlebot parity,
     // staging hosts, 304 and compression, secret files, certificate expiry, language redirects.
-    const probes = ctl.stop || settings.siteProbes !== true ? [] : await siteProbeIssues({ start, pages, robots: robotsTxt ? robots : null, ua, parse: parseHtml, notFoundHash,
-      resUrls: [...resSet], seenUrls: [...extSet, ...pages.map((p) => p.canonical).filter(Boolean), ...sitemap.urls], sourceMaps: scripts.sourceMaps || [], stop: () => ctl.stop }).catch(() => []);
-    const localNap = ctl.stop || !home ? [] : await localNapIssues({ url: home.url, html: home.dom }, settings).catch(() => []);
+    const probes = ctl.stop || settings.siteProbes !== true ? [] : await skips.guard("Site probes", () => siteProbeIssues({ start, pages, robots: robotsTxt ? robots : null, ua, parse: parseHtml, notFoundHash,
+      resUrls: [...resSet], seenUrls: [...extSet, ...pages.map((p) => p.canonical).filter(Boolean), ...sitemap.urls], sourceMaps: scripts.sourceMaps || [], stop: () => ctl.stop }), []);
+    const localNap = ctl.stop || !home ? [] : await skips.guard("Local business details (NAP) check", () => localNapIssues({ url: home.url, html: home.dom }, settings), []);
     // VideoObject thumbnails and files (up to 20 requests, one at a time), and CTAs below the first phone screen (up
     // to 6 pages, in the rendering browser, or in one launched for this when Lighthouse is on).
-    const videoFiles = ctl.stop ? [] : await videoFileIssues(pages, { stop: () => ctl.stop }).catch(() => []);
+    const videoFiles = ctl.stop ? [] : await skips.guard("Video file checks", () => videoFileIssues(pages, { stop: () => ctl.stop }), []);
     // Routes only the site's own JavaScript navigates to (js-routes.mjs): its scripts read as text, candidates fetched
     // once each (robots.txt obeyed even when the crawl ignores it), never crawled as links.
-    const jsRoutes = ctl.stop ? { issues: [], stats: null } : await jsOnlyRouteIssues({ origin, ua, headersFor: extraFor, rendered: Boolean(browser), gate: speed.gate, stop: () => ctl.stop,
+    const jsRoutes = ctl.stop ? { issues: [], stats: null } : await skips.guard("JavaScript-only routes", () => jsOnlyRouteIssues({ origin, ua, headersFor: extraFor, rendered: Boolean(browser), gate: speed.gate, stop: () => ctl.stop,
       scripts: [...resSet].filter((u) => { const x = new URL(u); return x.origin === origin && /\.m?js$/i.test(x.pathname); }), inline: home ? inlineScripts(home.html) : [],
       known: new Set([...pages.flatMap((x) => [x.url, x.final_url]), ...sitemap.urls, ...all("SELECT DISTINCT to_url FROM links WHERE audit_id=? AND kind='a' AND internal=1", auditId).map((l) => l.to_url)].filter(Boolean)),
       blocked: (u) => Boolean(robotsTxt) && robots.isAllowed(u, "SEOAuditor") === false,
-      fetchPage: (u) => fetchFollow(u, ua, extraFor, fetchOpts), parse: parseHtml, fingerprint: textFingerprint, notFound: notFoundHash }).catch(() => ({ issues: [], stats: null }));
+      fetchPage: (u) => fetchFollow(u, ua, extraFor, fetchOpts), parse: parseHtml, fingerprint: textFingerprint, notFound: notFoundHash }), { issues: [], stats: null });
     let fold = [];
     if (!ctl.stop && (browser || settings.cwvPages > 0)) {
       let b = browser;
       try {
         if (!b) { const { launchChromium } = await import("./browser.mjs"); b = await launchChromium(); }
         fold = await ctaFoldIssues({ pages, start, browser: b, stop: () => ctl.stop });
-      } catch { /* no browser on this computer: not checked */ } finally { if (b && b !== browser) await b.close().catch(() => {}); }
+      } catch (e) { skips.note("Calls to action below the first screen", e); } finally { if (b && b !== browser) await b.close().catch(() => {}); }
     }
     const redirOf = new Map(pages.filter((p) => p.data.redirect).map((p) => [p.url, p.data.redirect.to]));
     // Pages still behind a bot wall: reported as bot_wall_blocked, not as broken links or bad sitemap URLs.
@@ -720,7 +722,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const blocks = get("SELECT COUNT(*) n FROM issues WHERE audit_id=? AND check_id='ai_search_bot_blocked'", auditId).n;
     const aiScore = aiReadiness(aiRows, pages.filter((p) => p.indexable && /html/.test(p.content_type || "")).length, blocks); // PDFs have no AI checks
     const siteInfo = { robotsTxt: Boolean(robotsTxt), sitemapUrls: sitemap.urls.size, sitemapDeclared: sitemap.declared, llmsTxt: llms.status === 200,
-      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: renderMode, render: plan.summary(), codeHash: CODE_HASH, incremental: reuse.summary(), resumed: Boolean(resumed) || undefined, jsRoutes: jsRoutes.stats, content: content.summary(), extract: extractor.summary() || undefined, pdfs: pdfs.summary() || undefined,
+      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: renderMode, render: plan.summary(), codeHash: CODE_HASH, incremental: reuse.summary(), resumed: Boolean(resumed) || undefined, jsRoutes: jsRoutes.stats, content: content.summary(), extract: extractor.summary() || undefined, pdfs: pdfs.summary() || undefined, skipped: skips.summary(),
       fetchLadder: { via: ladder.stats.via, walls: ladder.stats.walls, slowDowns: ladder.stats.slowDowns, parallel: ladder.stats.parallel }, speed: speed.stats };
     run("UPDATE audits SET ai_readiness=?, site_info=? WHERE id=?", aiScore, JSON.stringify(siteInfo), auditId);
     run("UPDATE audits SET status=?, finished_at=datetime('now'), pages_crawled=?, pages_queued=0, health=?, errors=?, warnings=?, notices=?, message=? WHERE id=?",

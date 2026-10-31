@@ -180,7 +180,7 @@ export function cwvRows(auditId, formFactor = "mobile") {
 
 let busy = false;
 export function register({ routes }) {
-  afterAudit.push((auditId, project, settings) => (settings.cwvPages > 0 ? runCwv(auditId, project, settings) : null));
+  afterAudit.push(Object.assign((auditId, project, settings) => (settings.cwvPages > 0 ? runCwv(auditId, project, settings) : null), { label: "Lighthouse (Core Web Vitals lab data)" }));
   routes.push(["GET", /^\/api\/audits\/(\d+)\/cwv$/, ([id]) => ({ thresholds: THRESHOLDS, rows: cwvRows(Number(id)), desktop: cwvRows(Number(id), "desktop"), running: busy })]);
   routes.push(["POST", /^\/api\/audits\/(\d+)\/cwv$/, async ([id], q, body) => {
     const a = get("SELECT * FROM audits WHERE id=? AND status='done'", Number(id));

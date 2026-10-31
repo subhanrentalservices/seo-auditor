@@ -25,9 +25,8 @@ const SKIP = new Set(["./scheduler.mjs", "./backlinks.mjs", "./desktop.mjs"]);
 export async function scheduledRun({ isAppRunning = appRunning, log = console.log, loadModules = true, startAudit, deps } = {}) {
   if (await isAppRunning()) { log("SEO Auditor is open, and its own scheduler runs audits, alerts and reports. Nothing to do."); return { skipped: "app running" }; }
   if (loadModules) {
-    const { MODULES } = await import("./server.mjs");
-    for (const m of MODULES.filter((x) => !SKIP.has(x)))
-      await import(m).then((x) => x.register?.({ routes: [], prefixes: [], cli: true })).catch((e) => { if (e.code !== "ERR_MODULE_NOT_FOUND") log(`${m}: ${e.message}`); });
+    const { MODULES, loadModules } = await import("./server.mjs");
+    await loadModules(MODULES.filter((x) => !SKIP.has(x)), { routes: [], prefixes: [], cli: true }, log);
   }
   const runner = await import("./runner.mjs");
   const { dueProjects } = await import("./scheduler.mjs");

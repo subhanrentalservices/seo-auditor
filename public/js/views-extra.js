@@ -7,7 +7,9 @@ import "./views-paid.js"; // after views-data: it anchors its nav entries to "se
 import "./views-reclaim.js"; // after views-paid: "Lost pages" sits right below Search Console
 import "./views-rank.js"; // after views-reclaim: Rank tracker and GSC explorer sit right below Search Console; wraps VIEWS.search
 import "./views-ai.js";
+import "./views-ai-plus.js"; // after views-ai: wraps the AI visibility screen
 import "./views-report.js";
+import "./views-checks.js"; // "All checks" right below Issues
 import "./views-ideas.js";
 import "./views-competitors.js"; // after views-ideas: "Competitors" sits right below "Link ideas"
 import "./views-research.js"; // after views-competitors: "Research" and "Content inventory" sit right below "Competitors"
