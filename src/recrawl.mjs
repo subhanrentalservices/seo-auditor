@@ -25,7 +25,7 @@ export const CODE_HASH = (() => {
   return h.digest("hex").slice(0, 16);
 })();
 // Settings that change what a page's stored data says; another value means nothing is reused.
-export const REUSE_SETTINGS = ["userAgent", "renderJs", "renderUserAgent", "includeSubdomains", "respectRobots"];
+export const REUSE_SETTINGS = ["userAgent", "renderJs", "renderUserAgent", "includeSubdomains", "respectRobots", "extract"];
 // Fields about how this audit fetched the page, recomputed for every audit.
 const PER_AUDIT = ["dupOf", "fetchedVia", "retries", "redirect", "error", "botWall", "fallbackTried", "directStatus", "fallbackMs", "rateLimited", "reused304", "cookieRedirect"];
 const headerNames = (s) => (s?.requestHeaders || []).map((x) => String(x.name || "").toLowerCase()).sort().join(",");

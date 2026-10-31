@@ -32,7 +32,7 @@ Only this computer can reach it.
 - To stop it, run `scripts\stop.ps1` (right-click → Run with PowerShell).
 - If the shortcut is missing: `node src/cli.mjs install` in this folder.
 
-Needs Node.js 22 or newer. After copying the folder to another PC, run `npm install` and
+Needs Node.js 24 or newer (package.json engines). After copying the folder to another PC, run `npm install` and
 `npx playwright install chromium` once.
 
 ## Using it
@@ -138,6 +138,34 @@ Paid requests run only when you press their button, and stop at the monthly budg
   and the home page's inline scripts are searched for route paths (`path: "/x"`, `href:`/`to:` props,
   `navigate()`/`push()`/`replace()` calls). Up to 20 page-like paths that no crawled page links to and the sitemap
   doesn't list are fetched once (robots.txt obeyed); those that answer with their own page are reported, not crawled.
+
+### Content for AI tools and exports
+
+- **Markdown and JSONL exports** (Issues screen: *Export Markdown*, *Export JSONL*; `GET /api/audits/:id/export/markdown`
+  and `/export/jsonl`): each indexable page's main content as Markdown (headings, paragraphs, lists, tables, links, code,
+  quotes, image alt text; menus, headers, footers, sidebars, forms' controls, hidden parts and cookie banners left out,
+  using the crawler's main-content detection: `<main>` when the page has one). The JSONL has one object per crawled page:
+  url, final_url, status, content type, title, description, h1, canonical, lang, words, indexable, JSON-LD blocks,
+  Markdown and extracted values. Stored per audit, at most 100 KB of Markdown and 64 KB of JSON-LD per page (300 MB per
+  audit); downloads are streamed. Exports hold only what the pages publish: never request headers, cookies or keys (a
+  page that echoes a saved header value gets `[hidden]`).
+- **Custom extraction** (Settings → *Custom extraction*, setting `extract`, up to 20 rules): pull one value from every
+  HTML page, like Screaming Frog. *CSS*: a selector on the page as crawled (the rendered page when rendering is on),
+  giving its text (up to 10 matches joined by ` | `), inner HTML, an attribute, or the number of matches. *Regex*: a
+  JavaScript regular expression (flags i, m, s, u) on the raw HTML; the value is the first group or the whole match.
+  Values (500 characters max) are Pages columns you can sort and filter (contains / has a value / is empty), and go
+  into the pages CSV (`extract: <name>` columns) and the JSONL export. Patterns over 200 characters or with nested
+  quantifiers like `(a+)+` are refused; only the first 2 MB of a page is searched, each search stops after 100 ms, and
+  a rule that times out is skipped for the rest of the audit (`data.extractErrors`).
+- **PDFs** (`maxPdfs`, default 50 per audit, 0 = off; `maxPdfMb`, default 20, 1–64): Google indexes PDFs, so the
+  site's own PDFs (linked from its pages, or in its sitemap) are fetched on its own hosts only, robots.txt obeyed,
+  with the audit's user agent, and stored as pages of type `application/pdf`: title (the document's Title property;
+  "Microsoft Word - x.docx"-style defaults count as missing), first line of text (H1 column), text, words, page count,
+  language. Checks: broken (4xx/5xx, `broken_internal_link` to it), `missing_title`, `low_word_count` (none = scanned
+  pages without a text layer), `dup_title`, `dup_content`, `near_duplicate`, and `pdf_unreadable` (damaged, encrypted
+  or over the size limit). Their text goes into the Markdown and JSONL exports. Read in-process with
+  [unpdf](https://github.com/unjs/unpdf) (MIT, a server build of Mozilla's pdf.js, Apache-2.0): no service, font
+  eval off, 20 s and 300 text pages per file.
 
 ## Link building (merged Backlink Verifier, 2026-10-22)
 

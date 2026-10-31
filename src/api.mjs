@@ -6,6 +6,7 @@ import { startAudit, stop, activeAudit, resumeAudit } from "./runner.mjs";
 import { cleanRequestHeaders, saveRequestHeaders, maskHeaders } from "./request-headers.mjs";
 import { FALLBACK_MODES } from "./fetch-ladder.mjs";
 import { renderModeOf, RENDER_UAS } from "./render-mode.mjs";
+import { cleanExtractRules, RULE_NAME } from "./extract.mjs";
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const SEV_ORDER = { error: 0, warning: 1, notice: 2 };
@@ -25,7 +26,7 @@ function cleanSettings(input = {}) {
   for (const [k, def] of Object.entries(DEFAULT_SETTINGS)) {
     if (!(k in input)) continue;
     const v = input[k];
-    if (Array.isArray(def)) continue; // requestHeaders, below
+    if (Array.isArray(def)) continue; // requestHeaders and extract, below
     if (typeof def === "number") { const n = Number(v); if (Number.isFinite(n) && n >= 0) out[k] = Math.floor(n); }
     else if (typeof def === "boolean") out[k] = Boolean(v);
     else out[k] = String(v ?? "").slice(0, k === "targetKeywords" ? 4000 : 500);
@@ -33,11 +34,14 @@ function cleanSettings(input = {}) {
   if (out.concurrency !== undefined) out.concurrency = Math.min(Math.max(out.concurrency, 1), 20);
   if (out.maxConcurrency !== undefined) out.maxConcurrency = Math.min(Math.max(out.maxConcurrency, 1), 20); // below concurrency = no speeding up
   if ("renderJs" in input) out.renderJs = renderModeOf(input.renderJs); // false | "auto" | true (not coerced to a boolean)
+  if (out.maxPdfs !== undefined) out.maxPdfs = Math.min(out.maxPdfs, 1000);
+  if (out.maxPdfMb !== undefined) out.maxPdfMb = Math.min(Math.max(out.maxPdfMb, 1), 64);
   if (out.renderConcurrency !== undefined) out.renderConcurrency = Math.min(Math.max(out.renderConcurrency, 1), 8);
   if (out.renderUserAgent !== undefined && !RENDER_UAS.includes(out.renderUserAgent)) out.renderUserAgent = DEFAULT_SETTINGS.renderUserAgent;
   if (out.schedule !== undefined && !["off", "daily", "weekly"].includes(out.schedule)) out.schedule = "off";
   if (out.blockedFallback !== undefined && !FALLBACK_MODES.includes(out.blockedFallback)) out.blockedFallback = DEFAULT_SETTINGS.blockedFallback;
   if ("requestHeaders" in input) out.requestHeaders = cleanRequestHeaders(input.requestHeaders);
+  if ("extract" in input) out.extract = cleanExtractRules(input.extract); // throws 400 naming the bad rule
   return out;
 }
 
@@ -154,8 +158,18 @@ export function listPages(auditId, q = {}) {
   else if (q.status === "error") where.push("(p.status>=400 OR p.status=0)");
   if (q.indexable === "1") where.push("p.indexable=1"); else if (q.indexable === "0") where.push("p.indexable=0");
   if (q.issue) { where.push("EXISTS (SELECT 1 FROM issues i WHERE i.audit_id=p.audit_id AND i.url=p.url AND i.check_id=?)"); args.push(String(q.issue)); }
-  const sort = PAGE_SORT[q.sort] || "p.url"; const dir = q.dir === "desc" ? "DESC" : "ASC";
+  // Custom extraction values (extract.mjs): x = rule name, xop = contains | empty | filled, xv = text to look for.
+  const xPath = (name) => (RULE_NAME.test(String(name || "")) ? `$.extract."${name}"` : null);
+  if (xPath(q.x)) {
+    const val = "COALESCE(CAST(json_extract(p.data, ?) AS TEXT), '')";
+    if (q.xop === "empty") { where.push(`${val} IN ('', '0')`); args.push(xPath(q.x)); }
+    else if (q.xop === "filled") { where.push(`${val} NOT IN ('', '0')`); args.push(xPath(q.x)); }
+    else if (q.xv) { where.push(`${val} LIKE ?`); args.push(xPath(q.x), `%${String(q.xv).slice(0, 200)}%`); }
+  }
+  const xSort = String(q.sort || "").startsWith("x:") ? xPath(String(q.sort).slice(2)) : null;
+  const sort = xSort ? "json_extract(p.data, ?)" : PAGE_SORT[q.sort] || "p.url"; const dir = q.dir === "desc" ? "DESC" : "ASC";
   const sql = `SELECT p.url, p.final_url, p.status, p.depth, p.response_ms, p.bytes, p.title, p.h1, p.indexable, p.in_sitemap, p.inlinks, p.outlinks, p.words,
+      json_extract(p.data, '$.extract') extract,
       COALESCE(ic.errors, 0) errors, COALESCE(ic.warnings, 0) warnings, COALESCE(ic.issues, 0) issues,
       g.clicks, g.impressions, g.position
     FROM pages p LEFT JOIN gsc g ON g.project_id=? AND g.url IN (p.url, p.final_url)
@@ -163,7 +177,8 @@ export function listPages(auditId, q = {}) {
     WHERE ${where.join(" AND ")} ORDER BY ${sort} ${dir} LIMIT ? OFFSET ?`;
   const limit = Math.min(Number(q.limit) || 100, 5000), offset = Number(q.offset) || 0;
   const total = get(`SELECT COUNT(*) n FROM pages p WHERE ${where.join(" AND ")}`, ...args).n;
-  return { total, rows: all(sql, a.project_id, a.id, ...args, limit, offset) };
+  const rows = all(sql, a.project_id, a.id, ...args, ...(xSort ? [xSort] : []), limit, offset).map((r) => ({ ...r, extract: r.extract ? JSON.parse(r.extract) : null }));
+  return { total, rows };
 }
 
 export function getPage(auditId, url) {
@@ -203,7 +218,11 @@ export function exportCsv(auditId, kind) {
     const rows = all("SELECT check_id, severity, url, detail FROM issues WHERE audit_id=? ORDER BY severity, check_id, url", a.id).map((r) => ({ ...r, title: CHECKS[r.check_id]?.[1] }));
     return toCsv(rows, ["severity", "check_id", "title", "url", "detail"]);
   }
-  if (kind === "pages") return toCsv(listPages(a.id, { limit: 5000000 }).rows, ["url", "status", "depth", "indexable", "in_sitemap", "inlinks", "outlinks", "words", "response_ms", "bytes", "title", "h1", "errors", "warnings", "clicks", "impressions", "position"]);
+  if (kind === "pages") { // custom extraction values as extra columns, one per rule of the audit
+    const names = (JSON.parse(a.settings || "{}").extract || []).map((r) => r.name).filter(Boolean);
+    const rows = listPages(a.id, { limit: 5000000 }).rows.map((r) => ({ ...r, ...Object.fromEntries(names.map((n) => [`extract: ${n}`, r.extract?.[n]])) }));
+    return toCsv(rows, ["url", "status", "depth", "indexable", "in_sitemap", "inlinks", "outlinks", "words", "response_ms", "bytes", "title", "h1", "errors", "warnings", "clicks", "impressions", "position", ...names.map((n) => `extract: ${n}`)]);
+  }
   if (kind === "links") return toCsv(all("SELECT from_url, to_url, anchor, internal, nofollow, kind FROM links WHERE audit_id=?", a.id), ["from_url", "to_url", "anchor", "internal", "nofollow", "kind"]);
   fail(404, "Unknown export");
 }

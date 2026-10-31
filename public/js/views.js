@@ -1,5 +1,6 @@
 // Main screens: projects, overview, issues, pages (+ page drawer), AI audit, history/compare, settings.
 import { h, mount, api, toast, num, when, shortUrl, sevBadge, SEV_LABEL, meter, lineChart, multiLineChart, barChart, table } from "./core.js";
+import { extractEditor, extractColumns, extractFilter } from "./views-extract.js";
 
 export const VIEWS = {};
 // Sidebar entries; other modules push more (with optional `section` headers).
@@ -116,7 +117,9 @@ VIEWS.issues = async (ctx) => {
   };
   draw();
   return [h("div", { class: "row", style: { justifyContent: "space-between" } }, h("p", { class: "hint", style: { margin: 0 } }, "Click an issue for why it matters, how to fix it and the affected URLs. AI-search issues and notices (including items marked information: not a Google ranking issue) don't count toward Site Health, which is this tool's score, not a Google metric."),
-    h("div", { class: "row" }, h("a", { class: "btn sm", href: `/api/audits/${aid}/export/issues.csv` }, "Export issues CSV"), h("a", { class: "btn sm", href: `/api/audits/${aid}/export/links.csv` }, "Export links CSV"))),
+    h("div", { class: "row" }, h("a", { class: "btn sm", href: `/api/audits/${aid}/export/issues.csv` }, "Export issues CSV"), h("a", { class: "btn sm", href: `/api/audits/${aid}/export/links.csv` }, "Export links CSV"),
+      h("a", { class: "btn sm", href: `/api/audits/${aid}/export/markdown`, title: "Main content of every indexable page as one Markdown file, for AI tools" }, "Export Markdown"),
+      h("a", { class: "btn sm", href: `/api/audits/${aid}/export/jsonl`, title: "One JSON object per page: URL, status, title, description, H1, canonical, language, words, JSON-LD, Markdown, extracted values" }, "Export JSONL"))),
     tabBar, listEl];
 };
 
@@ -150,7 +153,8 @@ async function loadIssue(ctx, aid, g, body) {
 VIEWS.pages = async (ctx) => {
   if (!ctx.auditData) return noAudit(ctx);
   const aid = ctx.auditData.audit.id, base = ctx.project.start_url;
-  const q = { q: ctx.route.q.q || "", status: "", indexable: "", issue: ctx.route.q.issue || "", sort: "url", dir: "asc", offset: 0, limit: 100 };
+  const q = { q: ctx.route.q.q || "", status: "", indexable: "", issue: ctx.route.q.issue || "", x: "", xop: "contains", xv: "", sort: "url", dir: "asc", offset: 0, limit: 100 };
+  const xNames = (ctx.auditData.audit.settings?.extract || []).map((r) => r.name); // custom extraction columns (views-extract.js)
   const out = h("div", {}); const info = h("span", { class: "small muted" });
   const search = h("input", { type: "search", placeholder: "Search URL or title", value: q.q, style: { width: "260px" }, oninput: debounce(() => { q.q = search.value; q.offset = 0; load(); }, 250) });
   const sel = (key, opts) => h("select", { onchange: (e) => { q[key] = e.target.value; q.offset = 0; load(); } }, opts.map(([v, l]) => h("option", { value: v, selected: q[key] === v }, l)));
@@ -161,6 +165,7 @@ VIEWS.pages = async (ctx) => {
     { key: "inlinks", label: "Inlinks", num: true }, { key: "words", label: "Words", num: true },
     { key: "response_ms", label: "TTFB ms", num: true }, { key: "issues", label: "Issues", num: true, get: (r) => h("span", {}, r.errors ? h("span", { class: "badge error" }, r.errors) : null, " ", num(r.issues)) },
     { key: "clicks", label: "Clicks", num: true, get: (r) => num(r.clicks) }, { key: "impressions", label: "Impr.", num: true, get: (r) => num(r.impressions) },
+    ...extractColumns(xNames),
   ];
   async function load() {
     const d = await api(`/api/audits/${aid}/pages?` + new URLSearchParams(q));
@@ -175,7 +180,7 @@ VIEWS.pages = async (ctx) => {
   }
   await load();
   return [h("div", { class: "row" }, search, sel("status", [["", "Any status"], ["ok", "200 OK"], ["redirect", "Redirects"], ["error", "Errors (4xx/5xx)"]]),
-    sel("indexable", [["", "Indexable or not"], ["1", "Indexable"], ["0", "Not indexable"]]), sel("issue", issueOpts), info,
+    sel("indexable", [["", "Indexable or not"], ["1", "Indexable"], ["0", "Not indexable"]]), sel("issue", issueOpts), extractFilter(xNames, q, load), info,
     h("a", { class: "btn sm", href: `/api/audits/${aid}/export/pages.csv`, style: { marginLeft: "auto" } }, "Export pages CSV")), out];
 };
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -285,6 +290,7 @@ VIEWS.settings = async (ctx) => {
     includeSubdomains: h("input", { type: "checkbox", checked: s.includeSubdomains }), checkExternalLinks: h("input", { type: "checkbox", checked: s.checkExternalLinks }),
     auditBlockedUrls: h("input", { type: "checkbox", checked: s.auditBlockedUrls === true }),
     siteProbes: h("input", { type: "checkbox", checked: s.siteProbes === true }),
+    maxPdfs: h("input", { type: "number", min: 0, max: 1000, value: s.maxPdfs ?? 50 }), maxPdfMb: h("input", { type: "number", min: 1, max: 64, value: s.maxPdfMb ?? 20 }),
     blockedFallback: h("select", {}, [["browser", "curl, then a real browser"], ["curl", "curl only"], ["off", "Off"]].map(([v, l]) => h("option", { value: v, selected: (s.blockedFallback || "browser") === v }, l))),
     schedule: h("select", {}, [["off", "Off"], ["daily", "Daily"], ["weekly", "Weekly"]].map(([v, l]) => h("option", { value: v, selected: s.schedule === v }, l))),
     cwvPages: h("input", { type: "number", min: 0, max: 10000, value: s.cwvPages }), cwvDesktop: h("input", { type: "checkbox", checked: s.cwvDesktop === true }), gscProperty: h("input", { type: "text", value: s.gscProperty, placeholder: "sc-domain:example.com or https://example.com/" }),
@@ -311,11 +317,13 @@ VIEWS.settings = async (ctx) => {
   };
   for (const x of s.requestHeaders || []) addHdr(x.name, true);
   const headersEl = h("div", {}, hdrRows, h("button", { type: "button", class: "btn", onclick: () => addHdr() }, "Add header"));
+  const extractEl = extractEditor(s.extract || []);
   const save = async (e) => {
     e.preventDefault();
     const settings = {}; for (const k of Object.keys(s)) if (f[k]) settings[k] = f[k].type === "checkbox" ? f[k].checked : f[k].type === "number" ? Number(f[k].value) : f[k].value;
     if (f.localFolder.value || s.localFolder) settings.localFolder = f.localFolder.value;
     settings.requestHeaders = [...hdrRows.children].map((r) => r.read());
+    settings.extract = extractEl.read();
     try { await api(`/api/projects/${p.id}`, { method: "PUT", body: { name: f.name.value, start_url: f.start_url.value, settings } }); toast("Saved"); ctx.app.refresh(); } catch (err) { toast(err.message); }
   };
   return [h("form", { class: "card", onsubmit: save }, h("h2", {}, "Project settings"), h("div", { class: "form" },
@@ -330,6 +338,9 @@ VIEWS.settings = async (ctx) => {
     ...row("Check robots-blocked URLs", f.auditBlockedUrls, "Fetches up to 50 robots.txt-blocked URLs your site links to, once each, to find a noindex Google can't see. Only for sites you own (off by default)."),
     ...row("Pages that refuse the crawler", f.blockedFallback, "When a page answers 401/403/503 or a bot challenge, it is read again with curl, then in a real browser (up to 50 pages per audit). robots.txt is still obeyed, nothing is disguised or solved, and a 429 \"slow down\" is waited out, never bypassed."),
     ...row("Request headers (own site)", headersEl, "Sent only to this site's own hosts, never to other sites: e.g. a staging password (Authorization) or a bypass cookie your firewall issued. Values stay on this computer and are never shown again. The browser fallback sends only cookies and Basic authentication."),
+    ...row("PDFs read per audit", f.maxPdfs, "The site's own PDFs (linked from its pages or in its sitemap; robots.txt obeyed) are read for their title, text, words and pages, and checked like pages: broken, missing title, few words, duplicates. 0 = off."),
+    ...row("PDF size limit (MB)", f.maxPdfMb, "Larger PDFs are reported as not read (1–64; Googlebot reads up to 64 MB of a PDF)."),
+    ...row("Custom extraction", extractEl.el, "Up to 20 values pulled from every HTML page into Pages columns, the pages CSV and the JSONL export: CSS (text, inner HTML, an attribute or a count) on the page as crawled, or a regular expression on the raw HTML (first group; slow or risky patterns are refused or stopped after 100 ms)."),
     ...row("Extra site probes", f.siteProbes, "Up to 60 requests after the crawl, one at a time: search result pages, what Googlebot and phones get, staging copies, 304 and compression, exposed .env/.git files, certificate expiry, language redirects. Only for sites you own (off by default)."),
     ...row("Scheduled audit", f.schedule, "Runs while the app is open (it starts with Windows if enabled in README)."),
     ...row("Core Web Vitals pages", f.cwvPages, "Measured in headless Chrome after each audit (0 = off). About 15–20 s per page; a number above the site's page count measures every page. Pages are sampled by URL pattern: the home page, then the most-linked page of each template, most common first."),

@@ -11,7 +11,7 @@ if (-not (Test-Up)) {
   $node = (Get-Command node -ErrorAction SilentlyContinue).Source
   if (-not $node) {
     Add-Type -AssemblyName System.Windows.Forms
-    [void][System.Windows.Forms.MessageBox]::Show('Node.js was not found. Install Node.js 22 or newer from nodejs.org, then try again.', 'SEO Auditor')
+    [void][System.Windows.Forms.MessageBox]::Show('Node.js was not found. Install Node.js 24 or newer from nodejs.org, then try again.', 'SEO Auditor')
     exit 1
   }
   New-Item -ItemType Directory -Force (Join-Path $root 'data') | Out-Null

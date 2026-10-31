@@ -32,6 +32,9 @@ import { createReuse, resumeState, CODE_HASH } from "./recrawl.mjs";
 import { jsOnlyRouteIssues, inlineScripts } from "./js-routes.mjs";
 import { requestHeaderValues, headersFor, redact } from "./request-headers.mjs";
 import { domFacts, securityHeaders } from "./extra-checks.mjs";
+import { createContentStore } from "./page-content.mjs";
+import { createExtractor } from "./extract.mjs";
+import { createPdfs, isPdfType } from "./pdf.mjs";
 export { rawRenderedDiff, normalize };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser (BROWSER_UA,
@@ -330,6 +333,7 @@ export function parseHtml(html, url) {
     canonical, links, imgs, words, text, res: [...res].map((x) => normalize(x.trim(), url)).filter(Boolean),
     robotsMeta: robotsMeta.trim().toLowerCase().replace(/\s+/g, " "),
     textHash: words > 50 ? createHash("md5").update(text.toLowerCase()).digest("hex") : null,
+    jsonld: ld, // parsed JSON-LD blocks (content exports)
     data: d,
   };
 }
@@ -384,6 +388,9 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
   try {
     const resumed = deps.resume ? resumeState(auditId, followable) : null; // pages stored by the first run, and its link frontier
     const reuse = createReuse({ projectId: project.id, auditId, settings, start }); // incremental: unchanged pages copied on 304
+    const content = createContentStore({ auditId, redact: (s) => redact(s, own), reuseFrom: reuse.auditId }); // Markdown + JSON-LD of indexable pages
+    const extractor = createExtractor(settings.extract, { redact: (s) => redact(s, own) }); // custom extraction rules (extract.mjs)
+    const pdfs = createPdfs(settings); // the site's own PDFs: linked ones fetched too, count and size capped (pdf.mjs)
     const robotsRes = await fetchFollow(origin + "/robots.txt", ua, extraFor);
     const robotsTxt = robotsRes.status === 200 ? robotsRes.body : "";
     const robots = robotsParser(origin + "/robots.txt", robotsTxt);
@@ -416,7 +423,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     const speed = createSpeed({ start: settings.concurrency, max: settings.maxConcurrency, crawlDelay: settings.respectRobots ? crawlDelayMs(robots) : 0,
       ...(deps.sleep ? { sleep: (ms) => deps.sleep(ms, () => ctl.stop) } : {}) });
     const ladder = createLadder({ mode: settings.blockedFallback, concurrency: speed.stats.max, width: speed.width, inScope, blocked: robotsBlocked, headersFor: extraFor,
-      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor, { ...fetchOpts, conditional: reuse.conditional(u) }), curl: deps.curl || ((u, o) => curlFetch(u, { ...o, ua })),
+      stop: () => ctl.stop, sleep: deps.sleep, fetchPage: (u) => fetchFollow(u, ua, extraFor, { ...fetchOpts, conditional: reuse.conditional(u), pdfBytes: pdfs.bytes }), curl: deps.curl || ((u, o) => curlFetch(u, { ...o, ua })),
       browser: deps.browser || (async (u, o) => browserFetch(await fallbackBrowser.get(), u, { ...o, ua, blocked: (x) => inScope(x) && robotsBlocked(x) })) });
 
     const parallel = () => Math.min(ladder.parallel(), speed.width());
@@ -461,7 +468,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
           if (rendered?.html && !jsRedirectOf(final, rendered, rawParse.data.metaRefresh)) { jsWordsRaw = rawParse.words; raw = rawParse; html = rendered.html; }
         }
         const isHtml = /html/.test(r.type) && r.status === 200;
-        const p = old ? old.p : isHtml ? (rawParse && html === r.body ? rawParse : parseHtml(html, final)) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], res: [], words: 0, text: "", data: {} };
+        const isPdf = !old && r.status === 200 && isPdfType(r.type);
+        const p = old ? old.p : isHtml ? (rawParse && html === r.body ? rawParse : parseHtml(html, final)) : isPdf ? await pdfs.page(r) : { title: "", description: "", h1: "", canonical: null, links: [], imgs: [], res: [], words: 0, text: "", data: {} };
         const d = { ...p.data, redirect: r.redirect || undefined, error: r.error ? redact(r.error, own) : undefined, fetchedVia: r.via };
         if (r.botWall) d.botWall = { ...r.botWall, status: r.directStatus ?? r.status };
         if (r.tried?.length) d.fallbackTried = r.tried;
@@ -471,6 +479,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         if (r.charset) d.charset = r.charset; // decoded as declared, not as UTF-8
         if (r.truncated) d.truncated = true; // body over 15 MB: read stopped there
         if (r.cookieLoop) d.cookieRedirect = r.cookieLoop; // cookie_required_redirect
+        if (isHtml && !old) Object.assign(d, extractor.run(r.body, html)); // regex on the raw HTML, CSS on the page as crawled
         if (isHtml) {
           const hc = headClosedEarly(r.body); // always the raw source: a rendered DOM has already been repaired
           if (hc) d.headClosedEarly = hc;
@@ -487,6 +496,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         applyHeaderRobots(d, r.headers.get("x-robots-tag") || ""); // only googlebot: or unscoped header lines count
         const linkCanon = linkHeaderCanonical(r.headers.get("link"), final);
         if (linkCanon) d.canonicalHeader = linkCanon;
+        if (isPdf && linkCanon) p.canonical = linkCanon; // a PDF's only canonical is the HTTP Link header
         if (isHtml && p.text && !old) d.textHash = textFingerprint(p.text); // every page, even short ones (soft-404 and canonical checks)
         if (p.textHash) d.contentHash = p.textHash; // duplicate check, also for a resumed audit or a reused page
         if (old) d.reused304 = { audit: reuse.auditId };
@@ -498,7 +508,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         }
         if (jsWordsRaw !== null) { d.jsWordsRaw = jsWordsRaw; d.jsWordsRendered = p.words; }
         if (renderReason) { d.rendered = true; d.renderReason = renderReason; }
-        const indexable = r.status === 200 && isHtml && !d.noindex && (!p.canonical || p.canonical === final || p.canonical === url) ? 1 : 0;
+        const indexable = r.status === 200 && (isHtml || isPdf) && !d.noindex && (!p.canonical || p.canonical === final || p.canonical === url) ? 1 : 0;
         const bytes = r.size ?? Buffer.byteLength(r.body || ""); // bytes as served (decoded text may be longer or shorter)
         const ratio = bytes ? +(((d.visibleBytes ?? Buffer.byteLength(p.text)) / bytes) * 100).toFixed(1) : 0;
         // ?service=… style links that pre-fill a form: the URL's canonical is the same page without the query, so its
@@ -516,6 +526,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
             if (!seen.has(l.to) && followable(l.to)) {
               seen.set(l.to, (depth ?? 0) + 1); queue.push(l.to);
             } else if (seen.get(l.to) === null) seen.set(l.to, (depth ?? 0) + 1);
+            else if (!seen.has(l.to) && pdfs.link(l.to)) { seen.set(l.to, (depth ?? 0) + 1); queue.push(l.to); } // a PDF: fetched, its links aren't followed
           } else { extLinks++; if (l.nofollow) extNofollow++; extSet.add(l.to); }
         }
         for (const im of p.imgs) { insLink.run(auditId, final, im, "", inScope(im) ? 1 : 0, 0, "img", null, null); if (inScope(im)) imgSet.add(im); }
@@ -525,6 +536,8 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
         insPage.run(auditId, url, final, r.status, depth, r.type.split(";")[0], r.ms, bytes, p.title, p.description, p.h1, p.canonical, indexable,
           sitemap.urls.has(url) || sitemap.urls.has(final) ? 1 : 0, p.links.length, p.words, ratio, JSON.stringify(d));
         if (indexable && p.text) insText.run(auditId, final, p.text.slice(0, 30000));
+        if (indexable && old) content.reuse(url); else if (indexable && isHtml) content.saveHtml(url, html, final, p.jsonld);
+        else if (indexable && isPdf && p.markdown) content.save(url, { markdown: p.markdown });
         crawled++;
       }, () => ctl.stop || (settings.maxPages && crawled >= settings.maxPages));
       run("UPDATE audits SET pages_crawled=?, pages_queued=? WHERE id=?", crawled, queue.length, auditId);
@@ -705,9 +718,9 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
     // Only blocked search/answer fetchers cost points; training opt-outs (Google-Extended, GPTBot…) cost nothing.
     const aiRows = all("SELECT url, severity FROM issues WHERE audit_id=? AND check_id LIKE 'ai_%' AND check_id NOT IN ('ai_search_bot_blocked', 'ai_training_optout')", auditId);
     const blocks = get("SELECT COUNT(*) n FROM issues WHERE audit_id=? AND check_id='ai_search_bot_blocked'", auditId).n;
-    const aiScore = aiReadiness(aiRows, pages.filter((p) => p.indexable).length, blocks);
+    const aiScore = aiReadiness(aiRows, pages.filter((p) => p.indexable && /html/.test(p.content_type || "")).length, blocks); // PDFs have no AI checks
     const siteInfo = { robotsTxt: Boolean(robotsTxt), sitemapUrls: sitemap.urls.size, sitemapDeclared: sitemap.declared, llmsTxt: llms.status === 200,
-      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: renderMode, render: plan.summary(), codeHash: CODE_HASH, incremental: reuse.summary(), resumed: Boolean(resumed) || undefined, jsRoutes: jsRoutes.stats,
+      aiBots: aiBotAccess(robotsTxt, origin), crawlerAccess: access, renderJs: renderMode, render: plan.summary(), codeHash: CODE_HASH, incremental: reuse.summary(), resumed: Boolean(resumed) || undefined, jsRoutes: jsRoutes.stats, content: content.summary(), extract: extractor.summary() || undefined, pdfs: pdfs.summary() || undefined,
       fetchLadder: { via: ladder.stats.via, walls: ladder.stats.walls, slowDowns: ladder.stats.slowDowns, parallel: ladder.stats.parallel }, speed: speed.stats };
     run("UPDATE audits SET ai_readiness=?, site_info=? WHERE id=?", aiScore, JSON.stringify(siteInfo), auditId);
     run("UPDATE audits SET status=?, finished_at=datetime('now'), pages_crawled=?, pages_queued=0, health=?, errors=?, warnings=?, notices=?, message=? WHERE id=?",

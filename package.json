@@ -25,7 +25,8 @@
     "google-auth-library": "^9.15.1",
     "lighthouse": "^12.8.2",
     "playwright": "^1.64.1",
-    "robots-parser": "^3.0.1"
+    "robots-parser": "^3.0.1",
+    "unpdf": "^2.1.0"
   },
   "devDependencies": {
     "electron": "^45.0.0",

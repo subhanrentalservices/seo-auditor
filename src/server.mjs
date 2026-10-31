@@ -37,6 +37,21 @@ function send(res, status, body, type = "application/json; charset=utf-8", extra
   res.end(type.startsWith("application/json") ? JSON.stringify(body) : body);
 }
 
+/** A download written chunk by chunk from a (sync) iterable, waiting when the socket is full; stops if the client goes. */
+export async function streamOut(res, { __stream, type, headers = {} }) {
+  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...headers });
+  try {
+    for (const chunk of __stream) {
+      if (res.destroyed) break;
+      if (!res.write(chunk)) await new Promise((r) => {
+        const done = () => { res.off("drain", done); res.off("close", done); r(); }; // remove both: no listener build-up
+        res.once("drain", done); res.once("close", done);
+      });
+    }
+    res.end();
+  } catch (e) { console.error(e); res.destroy(); } // headers are sent: the client sees a cut-off download, not a JSON error
+}
+
 async function readBody(req) {
   let size = 0; const chunks = [];
   for await (const c of req) { size += c.length; if (size > 1e6) throw Object.assign(new Error("Request too large"), { status: 413 }); chunks.push(c); }
@@ -84,6 +99,7 @@ export function createServer() {
             const body = ["POST", "PUT"].includes(req.method) ? await readBody(req) : {};
             const out = await fn(m.slice(1), Object.fromEntries(url.searchParams), body);
             if (out && out.__raw) return send(res, 200, out.body, out.type, out.headers);
+            if (out && out.__stream) return streamOut(res, out);
             return send(res, 200, out);
           }
         }
@@ -104,7 +120,7 @@ export function createServer() {
 export const MODULES = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibility.mjs", "./report.mjs", "./scheduler.mjs", "./extras.mjs", "./desktop.mjs", "./backlinks.mjs", "./quality.mjs", "./page2.mjs", "./indexing.mjs", "./topics.mjs", "./citations.mjs", "./decay.mjs", "./queries.mjs", "./reclaim.mjs", "./linkgraph.mjs", "./trends.mjs", "./serpfeatures.mjs", "./changes.mjs",
   "./gsc-history.mjs", "./rank.mjs", "./gsc-sitemaps.mjs", "./gsc-discover.mjs", "./index-rotation.mjs", "./gsc-explorer.mjs",
   "./issue-trends.mjs", "./alert-channels.mjs", "./task-schedule.mjs", "./report-delivery.mjs", "./page-compare.mjs", "./competitor-pages.mjs",
-  "./kw-ideas.mjs", "./clusters.mjs", "./competitor-gap.mjs", "./content-inventory.mjs", "./content-brief.mjs",
+  "./kw-ideas.mjs", "./clusters.mjs", "./competitor-gap.mjs", "./content-inventory.mjs", "./content-brief.mjs", "./page-content.mjs",
   "./google-auth.mjs", "./ga4.mjs", "./bing.mjs", "./indexnow.mjs", "./alerts.mjs"]; // alerts last: it reads data the others refresh after an audit
 
 

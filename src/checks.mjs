@@ -4,6 +4,7 @@ import { isArticle } from "./conversion.mjs";
 import { schemaPageIssues } from "./schema.mjs";
 import { videoNotMain } from "./video-checks.mjs";
 import { EXTRA_CHECKS, CWV_CHECKS, extraPageIssues } from "./extra-checks.mjs";
+import { PDF_CHECKS, pdfPageIssues, isPdfType } from "./pdf.mjs";
 
 export const CHECKS = {
   // ---------------- Errors ----------------
@@ -194,6 +195,7 @@ export const CHECKS = {
   // ---------------- Security headers and accessibility (group 7, src/extra-checks.mjs) ----------------
   ...EXTRA_CHECKS,
   ...CWV_CHECKS, // raised after Lighthouse and CrUX by cwv-issues.mjs
+  ...PDF_CHECKS, // the site's own PDFs (pdf.mjs)
 };
 
 /** Checks shown under the Crawlability tab: can search engines reach and fetch the pages? */
@@ -274,6 +276,7 @@ export function pageIssues(p, ctx) {
     if (p.in_sitemap && p.status === 200) add("sitemap_non_canonical", `?query URL in the sitemap; its canonical is the clean URL ${d.variantOf}`);
     return out;
   }
+  if (p.status === 200 && isPdfType(p.content_type)) { for (const [id, det] of pdfPageIssues(p)) add(id, det); return out; } // title, words, unreadable
   if (p.status !== 200 || !isHtml) return out;
 
   if (p.bytes > 2 * 1024 * 1024) add("large_html", `${Math.ceil(p.bytes / 1024)} KB uncompressed; Googlebot reads only the first 2,048 KB`);

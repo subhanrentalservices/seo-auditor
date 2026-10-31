@@ -80,6 +80,9 @@ export const DEFAULT_SETTINGS = {
   siteProbes: false,      // opt-in, own sites only: up to 60 extra requests after the crawl: search pages, Googlebot/smartphone parity, staging hosts, 304/compression, secret files, TLS expiry, language redirects
   userAgent: "Mozilla/5.0 (compatible; SEOAuditor/1.0; +local)",
   blockedFallback: "browser", // pages that refuse the crawler (401/403/503, bot challenge): "off" | "curl" | "browser" (curl, then a real browser; fetch-ladder.mjs)
+  maxPdfs: 50,            // the site's own PDFs read per audit (linked or in the sitemap; 0 = off; pdf.mjs)
+  maxPdfMb: 20,           // largest PDF read, in MB (1–64; Googlebot reads up to 64 MB of a PDF)
+  extract: [],            // custom extraction rules, max 20: [{ name, type: "css", selector, output, attr? } | { name, type: "regex", pattern, flags }] (extract.mjs)
   requestHeaders: [],     // own-site headers/cookies, max 10: names only here [{ name, set }]; values in project_request_headers (request-headers.mjs)
   schedule: "off",        // off | daily | weekly
   cwvPages: 5,            // pages measured for Core Web Vitals (0 = off)

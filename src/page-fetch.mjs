@@ -10,6 +10,7 @@
 // fetch and sleeping can be injected (opts.fetchFn, opts.sleep), so tests need no network.
 import { REFUSED, WALL_BODY } from "./fetch-ladder.mjs";
 import { readBody, decodeBody, MAX_HTML } from "./body.mjs";
+import { isPdfType } from "./pdf.mjs";
 
 export const RETRY_DELAYS = [500, 1500]; // ms before retry 1 and 2
 export const MAX_HOPS = 10;
@@ -39,9 +40,11 @@ export function errorText(e) {
  *  502/504. A 503 isn't one: the fetch ladder handles it (Retry-After). */
 export const isTransient = (r) => r.status === 502 || r.status === 504 || (r.status === 0 && TRANSIENT_ERROR.test(r.error || ""));
 
-/** extra: the project's request headers (own hosts only) and conditional headers. Returns { status, headers, type,
- *  body, wallBody, ms (time to headers), location, size (bytes read), truncated?, charset? (when not UTF-8), error? }. */
-export async function fetchOnce(url, ua, method = "GET", timeout = 20000, extra = null, { fetchFn = fetch, maxBytes = MAX_HTML } = {}) {
+/** extra: the project's request headers (own hosts only) and conditional headers. pdfBytes: how many bytes of a PDF
+ *  to read (a number or a function giving one; 0 = none), kept as `bytes` (pdf.mjs). Returns { status, headers, type,
+ *  body, wallBody, ms (time to headers), location, size (bytes read), bytes?, truncated?, charset? (when not UTF-8),
+ *  error? }. */
+export async function fetchOnce(url, ua, method = "GET", timeout = 20000, extra = null, { fetchFn = fetch, maxBytes = MAX_HTML, pdfBytes = 0 } = {}) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeout);
   const t0 = Date.now();
@@ -51,11 +54,16 @@ export async function fetchOnce(url, ua, method = "GET", timeout = 20000, extra 
     const type = res.headers.get("content-type") || "";
     const textual = method === "GET" && /html|xml|text/.test(type);
     const out = { status: res.status, headers: res.headers, type, body: "", wallBody: "", ms: ttfb, location: res.headers.get("location"), size: 0 };
+    let pdfLimit = 0;
     if (textual && res.status < 300) {
       const b = await readBody(res, maxBytes), dec = decodeBody(b.buf, type);
       out.body = dec.text; out.size = b.size;
       if (b.truncated) out.truncated = true;
       if (dec.charset !== "utf-8") out.charset = dec.charset;
+    } else if (method === "GET" && res.status < 300 && isPdfType(type) && (pdfLimit = typeof pdfBytes === "function" ? pdfBytes() : pdfBytes) > 0) {
+      const b = await readBody(res, pdfLimit);
+      out.bytes = b.buf; out.size = b.size;
+      if (b.truncated) out.truncated = true;
     } else if (textual && REFUSED.has(res.status)) {
       // A refused answer keeps the start of its page, only to recognise a bot challenge (botWall); it isn't the page.
       const b = await readBody(res, WALL_BODY).catch(() => null);
