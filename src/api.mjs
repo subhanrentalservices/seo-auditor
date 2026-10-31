@@ -175,7 +175,7 @@ export function getPage(auditId, url) {
   const inlinks = all("SELECT DISTINCT from_url, anchor FROM links WHERE audit_id=? AND kind='a' AND internal=1 AND to_url IN (?, ?) AND from_url<>? LIMIT 500", a.id, p.url, p.final_url, p.url);
   const outlinks = all("SELECT to_url, anchor, internal, nofollow FROM links WHERE audit_id=? AND from_url IN (?, ?) AND kind='a' LIMIT 1000", a.id, p.url, p.final_url);
   const gsc = get("SELECT clicks, impressions, ctr, position, start_date, end_date FROM gsc WHERE project_id=? AND url IN (?, ?)", a.project_id, p.url, p.final_url);
-  const cwvRow = get("SELECT lcp_ms, cls, tbt_ms, fcp_ms, si_ms, transfer_kb, perf, a11y, bp, seo, details FROM cwv WHERE audit_id=? AND url IN (?, ?) AND error IS NULL", a.id, p.url, p.final_url);
+  const cwvRow = get("SELECT lcp_ms, cls, tbt_ms, fcp_ms, si_ms, transfer_kb, perf, a11y, bp, seo, details FROM cwv WHERE audit_id=? AND url IN (?, ?) AND error IS NULL AND COALESCE(form_factor, 'mobile')='mobile'", a.id, p.url, p.final_url);
   const cwv = cwvRow && { ...cwvRow, details: cwvRow.details ? JSON.parse(cwvRow.details) : null };
   return { page: { ...p, data: JSON.parse(p.data) }, issues, inlinks, outlinks, gsc, cwv };
 }

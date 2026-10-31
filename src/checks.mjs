@@ -3,6 +3,7 @@
 import { isArticle } from "./conversion.mjs";
 import { schemaPageIssues } from "./schema.mjs";
 import { videoNotMain } from "./video-checks.mjs";
+import { EXTRA_CHECKS, CWV_CHECKS, extraPageIssues } from "./extra-checks.mjs";
 
 export const CHECKS = {
   // ---------------- Errors ----------------
@@ -36,7 +37,7 @@ export const CHECKS = {
   missing_viewport: ["warning", "Missing viewport meta tag", "Without it, mobile browsers render a desktop layout.", "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">."],
   noindex_in_sitemap: ["warning", "Noindex page listed in sitemap", "Conflicting signals: the sitemap asks to index a noindex page.", "Remove it from the sitemap or allow indexing."],
   sitemap_orphan: ["notice", "Orphan pages (in sitemap, no internal links)", "Pages with no internal links are hard to discover and rank.", "Link to them from related pages and navigation."],
-  missing_lang: ["warning", "Missing lang attribute", "The page language helps search engines and screen readers.", "Add <html lang=\"en\"> (or the right language)."],
+  missing_lang: ["notice", "Missing html lang attribute (accessibility, not a Google ranking factor)", "Google doesn't use the lang attribute to work out a page's language: it reads the visible text (Google's multilingual sites doc). The attribute matters for people: screen readers pick the pronunciation from it, browsers use it to offer translation and for hyphenation and spell-checking, and WCAG 2 success criterion 3.1.1 (Language of Page) requires it.", "Add the page's language to the html element, e.g. <html lang=\"en-AU\">. For other language versions in Google, use hreflang links."],
   hreflang_issue: ["warning", "Hreflang issues", "Wrong hreflang can show the wrong language version.", "Use valid language codes and absolute URLs, include a self-reference."],
 
   // ---------------- Notices ----------------
@@ -190,6 +191,9 @@ export const CHECKS = {
   cookie_required_redirect: ["warning", "Redirect loop that only a cookie resolves", "Without cookies this URL redirects in a loop (or more than 10 times). Repeating the chain with the cookies the server set inside it reaches the page, so a browser that keeps cookies gets through. Googlebot crawls without keeping cookies between requests (stateless, like this tool's crawl), so for Google the page is an endless redirect and can't be indexed.", "Serve the page without requiring a cookie: set the cookie on the page itself instead of redirecting to set or check it, or skip the cookie check for requests that don't send one."],
   js_only_routes: ["notice", "Pages reachable only through JavaScript navigation", "The site's own scripts navigate to these URLs (a router config, a link prop or a navigate()/push() call), and each answers with a real page, but no crawled page links to it with an <a href> and the sitemap doesn't list it. Google finds pages by following <a href> links and reading sitemaps; it doesn't click buttons or run router calls, so these pages may never be crawled or indexed (Google, JavaScript SEO basics: use <a> elements with an href).", "If the page should be found in search, link to it with a real <a href=\"/path\"> from related pages (a router can still handle the click) and add it to the XML sitemap. If it shouldn't be, ignore this notice or add noindex."],
   cta_below_fold: ["notice", "Call to action below the first phone screen (conversion, not a Google ranking issue)", "On a 412×823 phone screen the first phone link, email link or call-to-action button of this home or money page starts below the first screen, and there is no sticky call bar. Visitors who are ready to act have to scroll to find how. A conversion and UX notice, not a Google ranking factor (Rio Ichikawa, \"A discussion of UX for SEO\", Search Off the Record 2024, anecdotal). Checked on up to 6 pages when a browser is available.", "Put the main action (call, book, get a quote) in the first screen on phones, e.g. a button under the H1 or a sticky call bar."],
+  // ---------------- Security headers and accessibility (group 7, src/extra-checks.mjs) ----------------
+  ...EXTRA_CHECKS,
+  ...CWV_CHECKS, // raised after Lighthouse and CrUX by cwv-issues.mjs
 };
 
 /** Checks shown under the Crawlability tab: can search engines reach and fetch the pages? */
@@ -291,6 +295,7 @@ export function pageIssues(p, ctx) {
     d.imgGenericName && `${d.imgGenericName} camera/screenshot file name(s), e.g. ${d.imgGenericNameExample}`].filter(Boolean).join("; "));
   if (!d.viewport) add("missing_viewport");
   if (!d.lang) add("missing_lang");
+  for (const [id, det] of extraPageIssues(d)) add(id, det); // security headers, form labels, button names, lang value
   if (d.canonicals > 1) add("canonical_multiple", `${d.canonicals} tags`);
   if (!d.canonicals && p.indexable) add("missing_canonical");
   if (p.canonical && p.canonical !== p.url && p.canonical !== p.final_url) add("canonical_elsewhere", p.canonical);

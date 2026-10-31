@@ -1,11 +1,17 @@
-// Lab Core Web Vitals via Lighthouse (the engine behind PageSpeed Insights), mobile, simulated throttling.
+// Lab Core Web Vitals via Lighthouse (the engine behind PageSpeed Insights), mobile (and desktop when the project's
+// cwvDesktop setting is on), simulated throttling. Pages are sampled by URL template.
 // Runs on Playwright's Chromium, so no separate Chrome install is needed. Lab data: repeatable, but not the
 // same as Google's field data (CrUX) — the UI says so.
 import lighthouse from "lighthouse";
+import desktopConfig from "lighthouse/core/config/desktop-config.js";
 import * as chromeLauncher from "chrome-launcher";
-import { all, get, run } from "./db.mjs";
+import { all, get, run, projectSettings } from "./db.mjs";
 import { afterAudit, phase } from "./runner.mjs";
 import { register as registerCrux } from "./crux.mjs";
+import { register as registerCruxHistory } from "./crux-history.mjs";
+import { provideFeed } from "./alerts.mjs";
+import { perfRegressions } from "./perf-alerts.mjs";
+import { register as registerCwvIssues, applyCwvIssues } from "./cwv-issues.mjs";
 
 export const THRESHOLDS = { lcp_ms: [2500, 4000], cls: [0.1, 0.25], tbt_ms: [200, 600], fcp_ms: [1800, 3000] };
 const CATEGORIES = ["performance", "accessibility", "best-practices", "seo"];
@@ -14,27 +20,40 @@ const CATEGORIES = ["performance", "accessibility", "best-practices", "seo"];
 export const RECHECK_RUNS = 5;
 const RECHECK_MAX_PAGES = 10;
 
-/** Picks up to n pages: the start page, then the most-linked page of each site section in turn. */
+/** URL pattern a page most likely shares a template with: "/" for the home page, "/*" for top-level pages, then the
+ *  first folder and one * per deeper level ("/blog/*", "/services/*\/*"), with "?" added when the URL has a query. */
+export function templateKey(url) {
+  const u = new URL(url), seg = u.pathname.split("/").filter(Boolean);
+  const key = !seg.length ? "/" : seg.length === 1 ? "/*" : `/${seg[0]}/${seg.slice(1).map(() => "*").join("/")}`;
+  return u.search ? `${key}?` : key;
+}
+
+/** Picks up to n pages by template: the start page, then the most-linked page of each URL pattern in turn, largest
+ *  pattern first, so a sample of 5 covers the home page and the four most common templates. */
 export function pickPages(auditId, n) {
   const rows = all("SELECT url, final_url, inlinks FROM pages WHERE audit_id=? AND status=200 AND indexable=1 AND content_type LIKE '%html%' ORDER BY depth IS NULL, depth, inlinks DESC", auditId);
   if (!rows.length || n <= 0) return [];
   const groups = new Map();
   for (const r of rows.slice(1)) {
-    const seg = new URL(r.final_url || r.url).pathname.split("/").filter(Boolean);
-    const key = seg.length > 1 ? seg[0] : "(root)";
+    const key = templateKey(r.final_url || r.url);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }
-  for (const g of groups.values()) g.sort((a, b) => b.inlinks - a.inlinks);
+  const order = [...groups.values()].sort((a, b) => b.length - a.length); // stable: equal sizes keep crawl order
+  for (const g of order) g.sort((a, b) => b.inlinks - a.inlinks);
   const out = [rows[0].final_url || rows[0].url];
-  while (out.length < n && [...groups.values()].some((g) => g.length))
-    for (const g of groups.values()) if (g.length && out.length < n) { const r = g.shift(); out.push(r.final_url || r.url); }
+  while (out.length < n && order.some((g) => g.length))
+    for (const g of order) if (g.length && out.length < n) { const r = g.shift(); out.push(r.final_url || r.url); }
   return out.slice(0, n);
 }
 
-/** One Lighthouse run → metrics, category scores, top opportunities and failed checks. */
-async function audit(port, url) {
-  const r = await lighthouse(url, { port, output: "json", logLevel: "error", onlyCategories: CATEGORIES, formFactor: "mobile", screenEmulation: { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false } });
+const MOBILE = { formFactor: "mobile", screenEmulation: { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false } };
+
+/** One Lighthouse run → metrics, category scores, top opportunities and failed checks. Desktop uses Lighthouse's own
+ *  desktop config (1350×940, desktop throttling), like PageSpeed Insights' desktop tab. */
+async function audit(port, url, formFactor = "mobile") {
+  const flags = { port, output: "json", logLevel: "error", onlyCategories: CATEGORIES };
+  const r = formFactor === "desktop" ? await lighthouse(url, flags, desktopConfig) : await lighthouse(url, { ...flags, ...MOBILE });
   const lhr = r.lhr, A = lhr.audits, C = lhr.categories;
   if (lhr.runtimeError) throw new Error(lhr.runtimeError.message);
   const score = (k) => (C[k]?.score === null || C[k]?.score === undefined ? null : Math.round(C[k].score * 100));
@@ -90,24 +109,26 @@ export function medianRun(runs) {
 export const RESTART_EVERY = 15;
 const CHROME_BROKEN = /internal Chrome error|performance mark has not been set|Target closed|ECONNREFUSED|Protocol error/i;
 
-/** Runs Lighthouse page by page in a Chrome it relaunches when needed. launch() → { port, kill() }; run(port, url). */
+/** Runs Lighthouse page by page in a Chrome it relaunches when needed. launch() → { port, kill() }; run(port, url, ...args). */
 export function chromeSession(launch, run, every = RESTART_EVERY) {
   let chrome = null, used = 0;
   const fresh = async () => { if (chrome) { try { await chrome.kill(); } catch { /* already gone */ } } chrome = await launch(); used = 0; };
   return {
-    async measure(url) {
+    async measure(url, ...args) {
       if (!chrome || used >= every) await fresh();
       used++;
-      try { return await run(chrome.port, url); } catch (e) {
+      try { return await run(chrome.port, url, ...args); } catch (e) {
         if (!CHROME_BROKEN.test(String(e?.message))) throw e;
         await fresh(); used++;
-        return run(chrome.port, url);
+        return run(chrome.port, url, ...args);
       }
     },
     async close() { if (chrome) { try { await chrome.kill(); } catch {} chrome = null; } },
   };
 }
 
+/** Measures the sampled pages on mobile, then (cwvDesktop) on desktop; re-checks blocking-time outliers on mobile only.
+ *  Rows carry form_factor ("mobile" / "desktop"; NULL in older audits = mobile) and details.template. */
 export async function runCwv(auditId, project, settings, n = settings.cwvPages) {
   const urls = pickPages(auditId, n);
   if (!urls.length) return [];
@@ -115,48 +136,52 @@ export async function runCwv(auditId, project, settings, n = settings.cwvPages) 
   const path = await chromiumPath();
   const chrome = chromeSession(() => chromeLauncher.launch({ chromePath: path, chromeFlags: ["--headless=new", "--no-first-run", "--disable-extensions"] }), audit);
   const out = [];
-  const save = (url, m, update) => run(update
-    ? "UPDATE cwv SET lcp_ms=?, cls=?, tbt_ms=?, transfer_kb=?, fcp_ms=?, si_ms=?, perf=?, a11y=?, bp=?, seo=?, details=? WHERE audit_id=? AND url=?"
-    : "INSERT INTO cwv (lcp_ms, cls, tbt_ms, transfer_kb, fcp_ms, si_ms, perf, a11y, bp, seo, details, audit_id, url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    m.lcp_ms, m.cls, m.tbt_ms, m.transfer_kb, m.fcp_ms, m.si_ms, m.perf, m.a11y, m.bp, m.seo, JSON.stringify(m.details), auditId, url);
+  const factors = settings.cwvDesktop === true ? ["mobile", "desktop"] : ["mobile"];
+  const save = (url, ff, m, update) => run(update
+    ? "UPDATE cwv SET lcp_ms=?, cls=?, tbt_ms=?, transfer_kb=?, fcp_ms=?, si_ms=?, perf=?, a11y=?, bp=?, seo=?, details=? WHERE audit_id=? AND url=? AND form_factor=?"
+    : "INSERT INTO cwv (lcp_ms, cls, tbt_ms, transfer_kb, fcp_ms, si_ms, perf, a11y, bp, seo, details, audit_id, url, form_factor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    m.lcp_ms, m.cls, m.tbt_ms, m.transfer_kb, m.fcp_ms, m.si_ms, m.perf, m.a11y, m.bp, m.seo, JSON.stringify({ ...m.details, template: templateKey(url) }), auditId, url, ff);
   try {
     run("DELETE FROM cwv WHERE audit_id=?", auditId);
-    for (const [i, url] of urls.entries()) {
-      phase(project.id, auditId, `Lighthouse ${i + 1}/${urls.length}`);
+    const jobs = factors.flatMap((ff) => urls.map((url) => [url, ff]));
+    for (const [i, [url, ff]] of jobs.entries()) {
+      phase(project.id, auditId, `Lighthouse ${i + 1}/${jobs.length}${factors.length > 1 ? ` (${ff})` : ""}`);
       try {
-        const m = await chrome.measure(url);
-        save(url, m);
-        out.push({ url, ...m });
+        const m = await chrome.measure(url, ff);
+        save(url, ff, m);
+        out.push({ url, form_factor: ff, ...m });
       } catch (e) {
-        run("INSERT INTO cwv (audit_id, url, error) VALUES (?,?,?)", auditId, url, String(e.message).slice(0, 300));
-        console.error("lighthouse", url, e.message);
+        run("INSERT INTO cwv (audit_id, url, form_factor, error) VALUES (?,?,?,?)", auditId, url, ff, String(e.message).slice(0, 300));
+        console.error("lighthouse", ff, url, e.message);
       }
     }
-    const targets = recheckTargets(out);
+    const mobile = out.filter((r) => r.form_factor === "mobile");
+    const targets = recheckTargets(mobile);
     for (const [i, url] of targets.entries()) {
-      const k = out.findIndex((r) => r.url === url), runs = [out[k]];
+      const k = out.findIndex((r) => r.url === url && r.form_factor === "mobile"), runs = [out[k]];
       for (let j = 2; j <= RECHECK_RUNS; j++) {
         phase(project.id, auditId, `Re-checking slow page ${i + 1}/${targets.length} (run ${j}/${RECHECK_RUNS})`);
-        try { runs.push(await chrome.measure(url)); } catch (e) { console.error("lighthouse re-check", url, e.message); }
+        try { runs.push(await chrome.measure(url, "mobile")); } catch (e) { console.error("lighthouse re-check", url, e.message); }
       }
       if (runs.length < 3) continue;
       const m = medianRun(runs);
-      save(url, m, true);
-      out[k] = { url, ...m };
+      save(url, "mobile", m, true);
+      out[k] = { url, form_factor: "mobile", ...m };
     }
   } finally { await chrome.close(); }
   return out;
 }
 
-export function cwvRows(auditId) {
-  return all("SELECT url, lcp_ms, cls, tbt_ms, fcp_ms, si_ms, transfer_kb, perf, a11y, bp, seo, details, error FROM cwv WHERE audit_id=? ORDER BY rowid", auditId)
+/** Lighthouse rows of one audit for one form factor (default mobile; older audits' rows have no form factor = mobile). */
+export function cwvRows(auditId, formFactor = "mobile") {
+  return all("SELECT url, COALESCE(form_factor, 'mobile') form_factor, lcp_ms, cls, tbt_ms, fcp_ms, si_ms, transfer_kb, perf, a11y, bp, seo, details, error FROM cwv WHERE audit_id=? AND COALESCE(form_factor, 'mobile')=? ORDER BY rowid", auditId, formFactor)
     .map((r) => ({ ...r, details: r.details ? JSON.parse(r.details) : null }));
 }
 
 let busy = false;
 export function register({ routes }) {
   afterAudit.push((auditId, project, settings) => (settings.cwvPages > 0 ? runCwv(auditId, project, settings) : null));
-  routes.push(["GET", /^\/api\/audits\/(\d+)\/cwv$/, ([id]) => ({ thresholds: THRESHOLDS, rows: cwvRows(Number(id)), running: busy })]);
+  routes.push(["GET", /^\/api\/audits\/(\d+)\/cwv$/, ([id]) => ({ thresholds: THRESHOLDS, rows: cwvRows(Number(id)), desktop: cwvRows(Number(id), "desktop"), running: busy })]);
   routes.push(["POST", /^\/api\/audits\/(\d+)\/cwv$/, async ([id], q, body) => {
     const a = get("SELECT * FROM audits WHERE id=? AND status='done'", Number(id));
     if (!a) throw Object.assign(new Error("Audit not finished"), { status: 400 });
@@ -164,8 +189,13 @@ export function register({ routes }) {
     const project = get("SELECT * FROM projects WHERE id=?", a.project_id);
     const n = Math.min(Math.max(Number(body.pages) || 5, 1), 10000); // more than the site has = every page
     busy = true;
-    runCwv(a.id, project, JSON.parse(a.settings || "{}"), n).catch((e) => console.error("lighthouse:", e.message)).finally(() => { busy = false; phase(project.id, a.id, null); });
+    // Desktop follows the request, else the project's current setting (the audit's own settings predate a change).
+    const settings = { ...JSON.parse(a.settings || "{}"), cwvDesktop: typeof body.desktop === "boolean" ? body.desktop : projectSettings(project).cwvDesktop === true };
+    runCwv(a.id, project, settings, n).then(() => applyCwvIssues(a.id, project)).catch((e) => console.error("lighthouse:", e.message)).finally(() => { busy = false; phase(project.id, a.id, null); });
     return { started: true };
   }]);
   registerCrux({ routes }); // field data (CrUX) after Lighthouse: its after-audit hook runs after the one above
+  registerCruxHistory({ routes }); // then the 25-week field-data trend
+  registerCwvIssues(); // then LCP/INP/CLS problems become issues (field first, lab fallback), before alerts read the totals
+  provideFeed("perfRegressions", perfRegressions); // Lighthouse regression alert (alerts.mjs rule perf_regression)
 }

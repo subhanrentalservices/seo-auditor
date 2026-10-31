@@ -50,7 +50,12 @@ Needs Node.js 22 or newer. After copying the folder to another PC, run `npm inst
 | Search Console | Clicks, impressions, keywords, quick wins, pages competing for one query; submitted sitemaps (errors, last read); Discover and Google News; scheduled URL Inspection within Google's 2,000-a-day limit (Search Console screen, off until you set a daily number) with a history of index-status changes | Free |
 | Rank tracker | Target keywords (Settings, up to 200) with tags: Search Console average position, clicks and impressions per day, best page, mobile vs desktop, change vs 7 and 28 days; rank drops, lost top 10 and new top 3. Day-by-day history kept for 16 months; each refresh fetches only new days | Free |
 | GSC explorer | Search Console performance live, filtered by search or page (contains or RE2 regex), country, device, type and dates, with CSV export | Free |
+| Analytics | Google Analytics 4 (Data API): organic sessions, engaged sessions and key events (conversions) by landing page, a 90-day organic trend (kept), key events per page, and visits referred by ChatGPT, Perplexity, Gemini, Copilot and Claude by landing page. Set the GA4 Property ID on the screen; refreshed after each audit (at most every 12 hours) | Free |
+| Bing | Bing Webmaster Tools API: clicks and impressions per day, top searches and pages (impression-weighted position), crawl stats, crawl issues (redirects, 4xx/5xx, robots.txt blocks, DNS, timeouts), inbound link counts and a sample of linking pages. IndexNow: submit pages new or changed since the previous audit (prefilled), only on the site's exact host, with a key-file check | Free |
 | Keywords | Every keyword the domain ranks for in Google (DataForSEO) | ≈ $0.03 per refresh |
+| Research | Keyword ideas from Google Autocomplete (seeded from target keywords and top Search Console searches; volumes only on a paid button), search clusters by shared ranking pages and words with gaps, and topics up to 5 saved competitors cover that you don't (their sitemaps plus the title/H1 of up to 50 robots-allowed pages each). Free reads go through a polite reader: robots.txt obeyed, one request at a time per site, the tool's own user agent, 7-day cache | Free (volumes ≈ $0.01 + $0.0001 per idea) |
+| Content brief | For one topic: the top 10 Google results, People Also Ask and related searches (DataForSEO), the top pages' H2/H3 headings merged, and your own searches on the topic. Outline only | ≈ $0.002 per brief |
+| Content inventory | Every indexable page with words, last modified, clicks and impressions trend, links in and decay, and a suggested action (keep, refresh, merge into X, prune or noindex) with the reason; CSV | Free |
 | Backlinks | Backlinks, referring domains, anchors, spam review and a disavow file | ≈ $0.08 per refresh |
 | AI visibility | Your prompts on ChatGPT, Google AI Overviews, Google AI Mode, Perplexity and Gemini: are you mentioned, cited, and where do you rank? | ≈ $0.024 per prompt (all five) |
 
@@ -167,6 +172,21 @@ The optional daily re-check is the Windows task "BacklinkVerifier Monitor" (Link
 - **Search Console** uses a Google service-account key file: set its path in App settings (default
   `~/.config/claude-seo/gsc-service-account.json`, or the `GSC_KEY_FILE` environment variable). Add the
   service account's email as a user on each property in Search Console.
+- **Google sign-in** (instead of the key file, for Search Console and GA4): create an OAuth client of type
+  “Desktop app” in Google Cloud console (enable the Search Console API and the Google Analytics Data API; on the
+  OAuth consent screen add yourself as a test user or publish the app, since Google ends test-mode sign-ins after 7
+  days), paste its ID and secret in App settings → Google sign-in, and press “Sign in with Google”. The sign-in runs
+  in your browser and returns to a one-off listener on 127.0.0.1 (state check, PKCE, 5 minutes). Read-only scopes.
+  The client secret and the refresh token are stored only in `data/config.json`, never shown again and removed from
+  error messages. Sign out (or switch back) to use the key file again.
+- **Google Analytics 4** uses the same sign-in as Search Console (the key file, or `ga4KeyFile` in config.json for a
+  different one, or Google sign-in). Enable the Google Analytics Data API in the key's Google Cloud project and add the
+  service account's email (or your signed-in account) as a Viewer in GA4 Admin → Property access management. AI
+  visits without a referrer show as Direct in GA4, so the AI referral numbers are a lower bound.
+- **Bing Webmaster Tools** uses an API key (Bing Webmaster Tools → Settings → API access), saved in App settings:
+  write-only, stored only in `data/config.json`, removed from every error. The site is matched by its address, or set
+  it on the Bing screen exactly as Bing lists it. **IndexNow** needs a key you choose (set on the Bing screen) and a
+  file `<key>.txt` holding only that key in the site's root folder; uploading it is your job, the screen checks it.
 - **DataForSEO** uses the login entered in App settings, or an `.mcp.json` file whose `dataforseo` server holds
   the login (App settings, or `DATAFORSEO_MCP_CONFIG`). Keys are read where they are and never copied.
 

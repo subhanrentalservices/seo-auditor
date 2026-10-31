@@ -1,4 +1,4 @@
-// Google Search Console via the existing service account (read-only scope). The key file is read at run time
+// Google Search Console via the service account or Google sign-in (read-only scope; google-auth.mjs). The key file is read at run time
 // from its own location and never copied. Stores page totals, query×page rows and a daily trend per project (by device,
 // brand, and the top countries), search appearance per day (REQ-044 row 47), and on the same refresh updates the
 // cached Search Status Dashboard feed (status-feed.mjs, row 49). Findings from this data: gsc-findings.mjs.
@@ -6,14 +6,13 @@
 // keywords, sitemaps and Discover/News are fetched by the afterRefresh steps (gsc-history.mjs, gsc-sitemaps.mjs, gsc-discover.mjs).
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { GoogleAuth } from "google-auth-library";
 import { db, all, get, run, ROOT, projectSettings, DATA } from "./db.mjs";
 import { afterAudit, phase } from "./runner.mjs";
 import { brandTerms, brandRegex } from "./trends.mjs";
 import { brandTest } from "./page2.mjs";
 import { refreshFeed } from "./status-feed.mjs";
 import { projectFindings, appearanceReport } from "./gsc-findings.mjs";
+import { googleRequest, SCOPES } from "./google-auth.mjs";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS gsc_queries (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -35,22 +34,15 @@ CREATE TABLE IF NOT EXISTS gsc_appearance (project_id INTEGER NOT NULL REFERENCE
 const TOP_COUNTRIES = 10;   // countries kept in the trend (by impressions over the 16 months)
 const MAX_APPEARANCES = 12; // search appearance types fetched day by day (one call each)
 
-// Service-account key: App settings, else GSC_KEY_FILE, else ~/.config/claude-seo/gsc-service-account.json.
-const DEFAULT_KEY = process.env.GSC_KEY_FILE || path.join(os.homedir(), ".config", "claude-seo", "gsc-service-account.json");
 export function config() {
   const f = path.join(DATA, "config.json");
   try { return existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {}; } catch { return {}; }
 }
-const keyFile = () => config().gscKeyFile || DEFAULT_KEY;
-
-let client;
-/** Search Console API call: a webmasters/v3 path, or a full https:// URL (e.g. the v1 URL Inspection endpoint). */
+/** Search Console API call: a webmasters/v3 path, or a full https:// URL (e.g. the v1 URL Inspection endpoint). Signs in
+ * with the service-account key file, or the owner's Google account when signed in (google-auth.mjs). */
 export async function gsc(urlPath, body) {
-  if (!existsSync(keyFile())) throw Object.assign(new Error(`Search Console key file not found: ${keyFile()}`), { status: 400 });
-  client ||= await new GoogleAuth({ keyFile: keyFile(), scopes: ["https://www.googleapis.com/auth/webmasters.readonly"] }).getClient();
   const url = urlPath.startsWith("https://") ? urlPath : "https://searchconsole.googleapis.com/webmasters/v3/" + urlPath;
-  const res = await client.request({ url, method: body ? "POST" : "GET", data: body });
-  return res.data;
+  return googleRequest(SCOPES.gsc, { url, method: body ? "POST" : "GET", data: body }, { service: "gsc", label: "Search Console" });
 }
 
 export async function listSites(call = gsc) { return ((await call("sites")).siteEntry || []).map((s) => s.siteUrl).sort(); }

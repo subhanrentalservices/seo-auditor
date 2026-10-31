@@ -10,6 +10,7 @@ import { db, all, get, run } from "./db.mjs";
 import { CHECKS } from "./checks.mjs";
 import { afterAudit } from "./runner.mjs";
 import { deliver, channelConfig, redact } from "./alert-channels.mjs";
+import { regressionItems } from "./perf-alerts.mjs";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS monitor_settings (project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, data TEXT NOT NULL DEFAULT '{}');
@@ -37,7 +38,8 @@ export function storedIndexRuns(projectId) {
 }
 const safe = (fn) => (id) => { try { return fn(id); } catch { return null; } }; // a table a module didn't create yet = no data
 export const feeds = { gscDaily: safe(storedGscDaily), indexRuns: safe(storedIndexRuns),
-  rankEvents: null }; // [{type: "drop"|"lost_top10"|"new_top3", query, from, to, impressions, page?, date?}] — rank tracker
+  rankEvents: null, // [{type: "drop"|"lost_top10"|"new_top3", query, from, to, impressions, page?, date?}] — rank tracker
+  perfRegressions: null }; // {auditId, prevAuditId, changes: [{url, formFactor, metric, from, to, change}]} — Lighthouse (perf-alerts.mjs)
 export function provideFeed(name, fn) { if (!(name in feeds)) throw new Error(`Unknown feed ${name}`); feeds[name] = fn ? safe(fn) : null; }
 
 // ---------------------------------------------------------------- pure rule logic (tested with fixtures)
@@ -89,6 +91,9 @@ export const RULES = {
     help: "Target keywords whose average position got worse, or that left the top 10, as reported by the rank tracker." },
   rank_gain: { scope: "data", periodHours: 7 * 24, label: "New top-3 rankings (rank tracker)", defaults: { on: false },
     help: "Good news: a target keyword reached the top 3." },
+  perf_regression: { scope: "data", periodHours: 24 * 3650, label: "Lighthouse metric got worse", defaults: { on: true, lcpMs: 500, cls: 0.05, tbtMs: 300, perf: 10 },
+    fields: { lcpMs: "ms slower LCP", cls: "CLS increase", tbtMs: "ms more TBT", perf: "Performance points lost" },
+    help: "Compares each page's Lighthouse run (mobile, and desktop when on) with the previous audit that has Lighthouse data. Alerts only when a metric got worse by more than the amount set here and is now outside \"good\". Lab data varies between runs." },
 };
 
 const issueSet = (auditId, where) => new Set(all(`SELECT DISTINCT check_id || char(0) || url k FROM issues WHERE audit_id=? AND ${where}`, auditId).map((r) => r.k));
@@ -146,6 +151,11 @@ const CHECK = {
   },
   rank_drop: (ctx) => rankItems(ctx, ["drop", "lost_top10"]),
   rank_gain: (ctx) => rankItems(ctx, ["new_top3"]),
+  perf_regression(ctx, s) {
+    if (!feeds.perfRegressions) return { skipped: "Lighthouse data not available" };
+    const f = feeds.perfRegressions(ctx.project.id);
+    return f ? regressionItems(f, s) : { skipped: "Needs two audits with Lighthouse data" };
+  },
 };
 function rankItems(ctx, types) {
   if (!feeds.rankEvents) return { skipped: "Rank tracker data not available" };
@@ -243,7 +253,8 @@ export function register({ routes, cli } = {}) {
   afterAudit.push((auditId, project) => runAlerts(project.id, { auditId })); // channel errors are caught and logged in deliver()
   const project = (id) => get("SELECT * FROM projects WHERE id=?", Number(id)) || fail(404, "Project not found");
   routes.push(["GET", /^\/api\/projects\/(\d+)\/alerts$/, ([id]) => {
-    const p = project(id), feedState = { gscDaily: Boolean(feeds.gscDaily?.(p.id)), indexRuns: Boolean(feeds.indexRuns?.(p.id)), rankEvents: Boolean(feeds.rankEvents && feeds.rankEvents(p.id)) };
+    const p = project(id), feedState = { gscDaily: Boolean(feeds.gscDaily?.(p.id)), indexRuns: Boolean(feeds.indexRuns?.(p.id)), rankEvents: Boolean(feeds.rankEvents && feeds.rankEvents(p.id)),
+      perfRegressions: Boolean(feeds.perfRegressions && feeds.perfRegressions(p.id)) };
     return { ...projectAlerts(p.id), catalog: Object.entries(RULES).map(([rid, r]) => ({ id: rid, label: r.label, help: r.help, scope: r.scope, fields: r.fields || {} })), feeds: feedState, log: alertLog(p.id) };
   }]);
   routes.push(["PUT", /^\/api\/projects\/(\d+)\/alerts$/, ([id], q, b) => updateProjectAlerts(project(id).id, b)]);

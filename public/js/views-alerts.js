@@ -54,9 +54,10 @@ VIEWS.alerts = async (ctx) => {
   const pid = ctx.project.id;
   const [a, rd] = await Promise.all([api(`/api/projects/${pid}/alerts`), api(`/api/projects/${pid}/report-delivery`)]);
   const NEEDS = { gsc_drop: ["gscDaily", "Needs Search Console data (connect it on the Search Console screen)."], index_rise: ["indexRuns", "Needs Index status runs."],
-    rank_drop: ["rankEvents", "Needs the rank tracker's data (not available yet)."], rank_gain: ["rankEvents", "Needs the rank tracker's data (not available yet)."] };
+    rank_drop: ["rankEvents", "Needs the rank tracker's data (not available yet)."], rank_gain: ["rankEvents", "Needs the rank tracker's data (not available yet)."],
+    perf_regression: ["perfRegressions", "Needs two audits with Lighthouse data (Core Web Vitals pages above 0 in Project settings)."] };
   const ruleRows = a.catalog.map((c) => {
-    const s = a.rules[c.id], on = check(s.on), nums = Object.entries(c.fields).map(([k, label]) => [k, h("input", { type: "number", min: 0, value: s[k], style: { width: "90px" } }), label]);
+    const s = a.rules[c.id], on = check(s.on), nums = Object.entries(c.fields).map(([k, label]) => [k, h("input", { type: "number", min: 0, step: "any", value: s[k], style: { width: "90px" } }), label]);
     const need = NEEDS[c.id] && !a.feeds[NEEDS[c.id][0]] ? NEEDS[c.id][1] : null;
     return { id: c.id, on, nums, el: h("div", { style: { padding: "8px 0", borderBottom: "1px solid var(--grid)" } },
       h("label", { class: "row" }, on, h("b", {}, c.label), h("span", { class: "small muted" }, c.scope === "audit" ? "after each audit" : "from stored data")),

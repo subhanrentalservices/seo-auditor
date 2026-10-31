@@ -31,6 +31,7 @@ import { GOOGLEBOT_SMARTPHONE_UA } from "./ua-parity.mjs";
 import { createReuse, resumeState, CODE_HASH } from "./recrawl.mjs";
 import { jsOnlyRouteIssues, inlineScripts } from "./js-routes.mjs";
 import { requestHeaderValues, headersFor, redact } from "./request-headers.mjs";
+import { domFacts, securityHeaders } from "./extra-checks.mjs";
 export { rawRenderedDiff, normalize };
 
 // Some sites (government WAFs, Cloudflare) reject unknown bots; external/image checks retry as a browser (BROWSER_UA,
@@ -276,6 +277,7 @@ export function parseHtml(html, url) {
   const words = text ? text.split(" ").length : 0;
   // Video embeds and their position, images, spam words, keyword stuffing, script hosts (page-signals.mjs).
   Object.assign(d, pageSignals($, { url, $c, text }));
+  Object.assign(d, domFacts($, { text, lang: d.lang })); // form labels, button names, lang value, readability (extra-checks.mjs)
   // Text-to-HTML ratio compares all visible text with the whole HTML (header and footer included on both sides);
   // using only <main> text against the whole file under-counted pages with a big header/footer.
   d.visibleBytes = Buffer.byteLength($t("body").text().replace(/\s+/g, " ").trim());
@@ -492,6 +494,7 @@ export async function runAudit(auditId, project, settings, onProgress = () => {}
           const et = r.headers.get("etag"), lm = r.headers.get("last-modified");
           if (et) d.etag = et.slice(0, 200);
           if (lm) d.lastModified = lm.slice(0, 100);
+          if (!old) d.secHeaders = securityHeaders(r.headers, final); // a 304 needn't repeat them: a reused page keeps its own
         }
         if (jsWordsRaw !== null) { d.jsWordsRaw = jsWordsRaw; d.jsWordsRendered = p.words; }
         if (renderReason) { d.rendered = true; d.renderReason = renderReason; }

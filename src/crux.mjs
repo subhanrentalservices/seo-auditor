@@ -53,7 +53,7 @@ export async function queryRecord(target, formFactor, key = cruxKey()) {
 }
 
 /** Pages Lighthouse measured in an audit (the URL-level CrUX lookups). */
-export const measuredUrls = (auditId) => all("SELECT url FROM cwv WHERE audit_id=? ORDER BY rowid", auditId).map((r) => r.url);
+export const measuredUrls = (auditId) => all("SELECT url FROM cwv WHERE audit_id=? GROUP BY url ORDER BY MIN(rowid)", auditId).map((r) => r.url);
 
 /** Origin (phone + desktop) and per-URL (phone, like Lighthouse's mobile run) records; replaces the project's last set. */
 export async function refreshCrux(project, urls = [], onStep) {

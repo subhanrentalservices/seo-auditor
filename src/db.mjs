@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_audit ON issues(audit_id, check_id);
 // Additive migrations for databases created by older versions.
 for (const [table, col, type] of [["audits", "ai_readiness", "INTEGER"], ["audits", "site_info", "TEXT"],
   ["cwv", "fcp_ms", "INTEGER"], ["cwv", "si_ms", "INTEGER"], ["cwv", "perf", "INTEGER"], ["cwv", "a11y", "INTEGER"], ["cwv", "bp", "INTEGER"],
-  ["cwv", "seo", "INTEGER"], ["cwv", "details", "TEXT"], ["cwv", "error", "TEXT"], ["links", "placement", "TEXT"], ["links", "rel", "TEXT"]]) {
+  ["cwv", "seo", "INTEGER"], ["cwv", "details", "TEXT"], ["cwv", "error", "TEXT"], ["cwv", "form_factor", "TEXT"], ["links", "placement", "TEXT"], ["links", "rel", "TEXT"]]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
 }
@@ -83,12 +83,14 @@ export const DEFAULT_SETTINGS = {
   requestHeaders: [],     // own-site headers/cookies, max 10: names only here [{ name, set }]; values in project_request_headers (request-headers.mjs)
   schedule: "off",        // off | daily | weekly
   cwvPages: 5,            // pages measured for Core Web Vitals (0 = off)
+  cwvDesktop: false,      // also run Lighthouse with its desktop settings (twice the time; cwv.mjs)
   gscProperty: "",        // e.g. "https://example.com/" or "sc-domain:example.com"
   dfsLocation: 2036,      // DataForSEO location code (2036 = Australia, 2840 = USA, 2826 = UK)
   dfsLanguage: "en",
   brandTerms: "",         // extra names that count as a brand mention in AI answers (comma-separated)
   spamAllowTerms: "",     // words hacked_spam_signals never reports on this site, e.g. "casino" for a casino's own site (comma-separated)
   targetKeywords: "",     // searches the owner wants to be found for, one per line (queries.mjs targetReport; up to 4,000 characters)
+  competitorDomains: "",  // up to 5 competitor websites for the content gap, one per line (competitor-gap.mjs)
   aiLocation: 0,          // DataForSEO location for AI/SERP checks (0 = same as dfsLocation; 9199156 = Dandenong VIC)
   localFolder: "",        // optional: folder with the site's files, for file/line hints
   napName: "",            // business listings: name, address and phone to check listings against
@@ -97,6 +99,9 @@ export const DEFAULT_SETTINGS = {
   rankDropThreshold: 3,   // rank alerts: 7-day average position this many places worse than the week before (rank.mjs)
   rankMinImpressions: 10, // rank alerts: impressions a keyword needs in each 7-day window to be judged
   inspectPerDay: 0,       // scheduled URL Inspection: URLs per day (0 = off; capped at 1,800 of Google's 2,000 a day; index-rotation.mjs)
+  ga4Property: "",        // GA4 Property ID (digits, or "properties/123…") for the Analytics screen (ga4.mjs)
+  bingSiteUrl: "",        // Bing Webmaster Tools site as registered there (empty = matched by the start URL; bing.mjs)
+  indexNowKey: "",        // IndexNow key (public by design: the site hosts it at /<key>.txt; indexnow.mjs)
 };
 
 export const all = (sql, ...p) => db.prepare(sql).all(...p);

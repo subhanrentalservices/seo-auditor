@@ -162,7 +162,7 @@ test("routes: settings with the rule catalogue, feed availability and the log", 
   const get = routes.find(([m, re]) => m === "GET" && re.test("/api/projects/1/alerts"))[2];
   const out = get(["1"]);
   assert.ok(out.catalog.find((c) => c.id === "gsc_drop").help.includes("2–3 days behind"));
-  assert.deepEqual(out.feeds, { gscDaily: false, indexRuns: true, rankEvents: false });
+  assert.deepEqual(out.feeds, { gscDaily: false, indexRuns: true, rankEvents: false, perfRegressions: false });
   assert.ok(out.log.length >= 5);
   assert.throws(() => get(["999"]), /Project not found/);
 });
