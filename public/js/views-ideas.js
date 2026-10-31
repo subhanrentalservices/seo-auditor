@@ -58,6 +58,24 @@ async function topicsCard(ctx) {
       : h("p", {}, "Every page covers the searches Google shows it for."));
 }
 
+// Near page 1, never clicked: 0-click searches at positions 5–20 and whether the page uses the search's own words
+// (src/topics.mjs zeroClickGaps).
+const ZC = { missing: ["down", "✕ not on the page"], scattered: ["", "words on the page, never together"], words: ["", "same words, other wording"], exact: ["", "in the text, no heading"] };
+async function zeroClickCard(ctx) {
+  const d = await api(`/api/audits/${ctx.auditData.audit.id}/zero-click`).catch(() => null);
+  if (!d?.connected || !d.total) return null;
+  const base = ctx.project.start_url;
+  return h("div", { class: "card" }, h("h2", {}, `Near page 1, never clicked (${d.rows.length})`),
+    h("p", { class: "hint" }, `Searches with impressions but 0 clicks at positions ${d.minPosition}–${d.maxPosition}, biggest first. Google already finds the page relevant. `,
+      "Where the search's words aren't on the page, add a short section with a heading in the searcher's words and a direct 40–60 word answer, if the page genuinely serves that search. ",
+      "Already in a heading? Then look at the title and description instead. Don't paste lists of searches or place names you don't serve: that's keyword stuffing.",
+      ` (${d.counts.heading} already in a heading${d.notCrawled ? `, ${d.notCrawled} on pages this audit didn't crawl` : ""}.)`),
+    d.rows.length ? table([{ label: "Search", get: (r) => [r.query, r.question ? h("span", { class: "small muted" }, " · question") : null] },
+      { label: "Page", cls: "url", get: (r) => shortUrl(r.url, base) }, { label: "Impr.", num: true, key: "impressions" }, { label: "Pos.", num: true, get: (r) => r.position.toFixed(1) },
+      { label: "On the page", get: (r) => { const [c, l] = ZC[r.status]; return h("span", { class: `small ${c}` }, l, r.missing.length ? ` (never uses: ${r.missing.join(", ")})` : ""); } }], d.rows)
+      : h("p", {}, "Every one of these searches is already a heading on its page."));
+}
+
 async function page2Cards(ctx) {
   const d = await api(`/api/audits/${ctx.auditData.audit.id}/page2`).catch(() => null);
   const base = ctx.project.start_url;
@@ -141,7 +159,7 @@ async function linkGraphCards(ctx) {
 // I4
 VIEWS.links = async (ctx) => {
   if (!ctx.auditData) return h("div", { class: "card empty" }, "Run an audit first.");
-  const page2 = [...(await page2Cards(ctx)), await topicsCard(ctx), ...(await linkGraphCards(ctx))].filter(Boolean);
+  const page2 = [...(await page2Cards(ctx)), await zeroClickCard(ctx), await topicsCard(ctx), ...(await linkGraphCards(ctx))].filter(Boolean);
   const rows = await api(`/api/audits/${ctx.auditData.audit.id}/link-opportunities`);
   const base = ctx.project.start_url;
   const head = h("div", { class: "card" }, h("h2", {}, "Internal link ideas"),

@@ -103,7 +103,7 @@ export function createServer() {
 // alerts run last, after Search Console has refreshed. scheduled-run.mjs loads the same list without the server.
 export const MODULES = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibility.mjs", "./report.mjs", "./scheduler.mjs", "./extras.mjs", "./desktop.mjs", "./backlinks.mjs", "./quality.mjs", "./page2.mjs", "./indexing.mjs", "./topics.mjs", "./citations.mjs", "./decay.mjs", "./queries.mjs", "./reclaim.mjs", "./linkgraph.mjs", "./trends.mjs", "./serpfeatures.mjs", "./changes.mjs",
   "./gsc-history.mjs", "./rank.mjs", "./gsc-sitemaps.mjs", "./gsc-discover.mjs", "./index-rotation.mjs", "./gsc-explorer.mjs",
-  "./issue-trends.mjs", "./alert-channels.mjs", "./task-schedule.mjs", "./report-delivery.mjs", "./alerts.mjs"]; // alerts last: it reads data the others refresh after an audit
+  "./issue-trends.mjs", "./alert-channels.mjs", "./task-schedule.mjs", "./report-delivery.mjs", "./page-compare.mjs", "./competitor-pages.mjs", "./alerts.mjs"]; // alerts last: it reads data the others refresh after an audit
 
 /** Load every module and listen on 127.0.0.1. Used by `node src/server.mjs` and by the desktop app. */
 export async function startServer() {

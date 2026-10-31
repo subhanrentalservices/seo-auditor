@@ -9,6 +9,7 @@ import "./views-rank.js"; // after views-reclaim: Rank tracker and GSC explorer 
 import "./views-ai.js";
 import "./views-report.js";
 import "./views-ideas.js";
+import "./views-competitors.js"; // after views-ideas: "Competitors" sits right below "Link ideas"
 import "./views-local.js";
 import "./views-alerts.js"; // last: anchors "Alerts" before Settings (after Report) and needs App settings from views-paid
 
