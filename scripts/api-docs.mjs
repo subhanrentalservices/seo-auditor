@@ -56,6 +56,7 @@ export const NOTES = {
   [`GET /api/projects/${P}/visibility/suggestions`]: "Free: question searches from Search Console (5+ impressions) that aren't prompts yet.",
   [`GET /api/projects/${P}/visibility/trends`]: "Per prompt per run: answered, mentioned, cited, best rank; share of voice per run.",
   [`GET /api/projects/${P}/visibility/sources`]: "Last run: own pages AI cites, and the closest own page for prompts where only others are cited.",
+  [`GET /api/projects/${P}/visibility/listing-targets`]: "Last run: other sites' pages AI cited or ChatGPT read for prompts that don't name you (list and directory pages flagged), and ChatGPT's own searches per prompt.",
   [`GET /api/projects/${P}/visibility/schedule`]: "The opt-in scheduled run: enabled, everyDays, platforms, maxCost, estimate per run, last result.",
   [`PUT /api/projects/${P}/visibility/schedule`]: "body: `enabled` (only `true` turns paid runs on), `everyDays` (7, 14 or 30), `platforms`, `maxCost` (dollars per run or null).",
   [`GET /api/audits/${A}/report.html`]: "The report as HTML.",

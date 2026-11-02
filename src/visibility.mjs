@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS ai_results (run_id INTEGER NOT NULL REFERENCES ai_run
 `);
 // SERP features snapshot (JSON) from the Google search already paid for; runs before 2026-10-26 have none.
 if (!db.prepare("PRAGMA table_info(ai_results)").all().some((c) => c.name === "serp")) db.exec("ALTER TABLE ai_results ADD COLUMN serp TEXT");
+// ChatGPT only (runs from 2026-11-02): {fanOut: the searches ChatGPT ran for the prompt, retrieved: pages it looked at but
+// didn't cite}. The same data a browser's network panel shows on chatgpt.com, from the answer DataForSEO already returns.
+if (!db.prepare("PRAGMA table_info(ai_results)").all().some((c) => c.name === "extra")) db.exec("ALTER TABLE ai_results ADD COLUMN extra TEXT");
 
 export const PLATFORMS = {
   chatgpt: { label: "ChatGPT (web search)", cost: 0.004 },
@@ -59,9 +62,15 @@ async function checkChatGpt(prompt, loc, b, pid) {
   return parseChatGpt(await call("ai_optimization/chat_gpt/llm_scraper/live/advanced", { keyword: prompt, location_code: loc, language_code: "en", force_web_search: true }, pid), b);
 }
 
-/** ChatGPT llm_scraper result: markdown, sources, local business cards and brand entities. */
+/** ChatGPT llm_scraper result: markdown, sources, local business cards and brand entities; plus the searches ChatGPT ran
+ *  (fan_out_queries) and the pages it retrieved without citing (search_results minus sources). */
 export function parseChatGpt(r, b) {
   const sources = (r.sources || []).map((x) => ({ domain: host(x.domain || x.url), url: x.url, title: x.title }));
+  const fanOut = [...new Set([r.fan_out_queries, ...(r.items || []).map((i) => i.fan_out_queries)].flat().filter(Boolean)
+    .map((q) => String(typeof q === "string" ? q : q.query || q.keyword || "").trim()).filter(Boolean))].slice(0, 30);
+  const citedUrls = new Set(sources.map((x) => x.url));
+  const retrieved = [];
+  for (const x of r.search_results || []) if (x.url && !citedUrls.has(x.url) && !retrieved.some((y) => y.url === x.url)) retrieved.push({ domain: host(x.domain || x.url), url: x.url, title: x.title || "" });
   const names = [];
   for (const it of r.items || []) {
     if (it.type === "chat_gpt_local_businesses") for (const x of it.items || []) names.push({ name: x.title, domain: host(x.domain || x.url || "") });
@@ -73,7 +82,8 @@ export function parseChatGpt(r, b) {
   const listed = listRank(r.markdown, b);
   const idx = listed ? listed - 1 : uniq.findIndex((n) => b.mentions(n.name) || (n.domain && b.isOwn(n.domain)));
   return { present: 1, mentioned: b.mentions(r.markdown) || idx >= 0 ? 1 : 0, cited: sources.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: idx >= 0 ? idx + 1 : null,
-    sources, brands: uniq.slice(0, 15).map((n) => n.name), excerpt: (r.markdown || "").slice(0, 1500), check_url: r.check_url || null };
+    sources, brands: uniq.slice(0, 15).map((n) => n.name), excerpt: (r.markdown || "").slice(0, 1500), check_url: r.check_url || null,
+    extra: { fanOut, retrieved: retrieved.slice(0, 40) } };
 }
 
 async function checkGoogle(prompt, loc, b, pid) {
@@ -203,17 +213,17 @@ function execute(project, runId, jobs, costBefore) {
   runningRuns.add(project.id);
   (async () => {
     let done = 0, stopped = null;
-    const ins = db.prepare(`INSERT INTO ai_results (run_id, prompt, platform, present, mentioned, cited, rank, organic_pos, local_pos, sources, brands, excerpt, check_url, error, serp)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const ins = db.prepare(`INSERT INTO ai_results (run_id, prompt, platform, present, mentioned, cited, rank, organic_pos, local_pos, sources, brands, excerpt, check_url, error, serp, extra)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const worker = async () => {
       while (jobs.length && !stopped) {
         const [prompt, pl] = jobs.shift();
         try {
           const x = await CHECK[pl](prompt, COUNTRY_LEVEL.has(pl) ? country : local, b, project.id);
-          ins.run(runId, prompt, pl, x.present, x.mentioned, x.cited, x.rank, x.organic_pos ?? null, x.local_pos ?? null, JSON.stringify(x.sources), JSON.stringify(x.brands), x.excerpt, x.check_url, null, x.serp ? JSON.stringify(x.serp) : null);
+          ins.run(runId, prompt, pl, x.present, x.mentioned, x.cited, x.rank, x.organic_pos ?? null, x.local_pos ?? null, JSON.stringify(x.sources), JSON.stringify(x.brands), x.excerpt, x.check_url, null, x.serp ? JSON.stringify(x.serp) : null, x.extra ? JSON.stringify(x.extra) : null);
         } catch (e) {
           if (e.status === 402) stopped = e.message; // budget reached: stop the whole run
-          ins.run(runId, prompt, pl, null, null, null, null, null, null, "[]", "[]", "", null, e.message.slice(0, 300), null);
+          ins.run(runId, prompt, pl, null, null, null, null, null, null, "[]", "[]", "", null, e.message.slice(0, 300), null, null);
         }
         done++;
         emit({ type: "phase", projectId: project.id, auditId: null, phase: `AI visibility ${done}/${total}` });

@@ -23,7 +23,7 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/audits/:auditId/export/issues.csv` | Issues CSV (also `pages.csv` with custom extraction columns, and `links.csv`). |
 | any | `/lv/…`, `/api/s/…`, `/s/…`, `/fonts/…` | Link building: passed to the link engine on 127.0.0.1:4561. |
 
-## Routes (125)
+## Routes (126)
 
 ### core (server.mjs, api.mjs)
 
@@ -94,6 +94,7 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/projects/:projectId/visibility/suggestions` | Free: question searches from Search Console (5+ impressions) that aren't prompts yet. |
 | GET | `/api/projects/:projectId/visibility/trends` | Per prompt per run: answered, mentioned, cited, best rank; share of voice per run. |
 | GET | `/api/projects/:projectId/visibility/sources` | Last run: own pages AI cites, and the closest own page for prompts where only others are cited. |
+| GET | `/api/projects/:projectId/visibility/listing-targets` | Last run: other sites' pages AI cited or ChatGPT read for prompts that don't name you (list and directory pages flagged), and ChatGPT's own searches per prompt. |
 | GET | `/api/projects/:projectId/visibility/schedule` | The opt-in scheduled run: enabled, everyDays, platforms, maxCost, estimate per run, last result. |
 | PUT | `/api/projects/:projectId/visibility/schedule` | body: `enabled` (only `true` turns paid runs on), `everyDays` (7, 14 or 30), `platforms`, `maxCost` (dollars per run or null). |
 

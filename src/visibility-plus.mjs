@@ -6,6 +6,10 @@
 //   3. a trend per prompt across runs, and competitor share of voice over time (domains cited per run),
 //   4. cited sources mapped to the site's own pages: which own pages AI cites, and for prompts where others are cited
 //      instead, the own page that best matches the prompt (Search Console first, then title/H1 words: a heuristic).
+//   5. listing targets (a "ChatGPT ranking hack" video, checked against OpenAI's help page "Searching the web with
+//      ChatGPT": ChatGPT rewrites a prompt into searches sent to search partners and cites what it finds; placement
+//      isn't guaranteed): for prompts that don't name the brand, the other sites' pages AI cited or ChatGPT retrieved,
+//      grouped by page, so list articles and directories to get onto stand out; plus ChatGPT's own searches.
 // Scheduled runs happen only while the app runs (checked every 30 minutes).
 import { db, all, get, run } from "./db.mjs";
 import { isQuestion, urlKey } from "./queries.mjs";
@@ -178,11 +182,45 @@ export function sourceMapping(projectId) {
   };
 }
 
+// "Best 10 panel beaters", "/find/plumbers/…", "top-rated", directories: pages a business can ask to be added to.
+const LIST_PAGE = /\b(best|top|top-?rated|most reviewed|\d+ (best|top)|directory|listings?|find|near me|compare|reviews?)\b|\/(best|find|search|directory|top)[\/-]/i;
+// Google's own result viewers (local pack cards, Maps, searches) are businesses in Google's results, not pages to get onto.
+const SE_PAGE = /^https?:\/\/(www\.)?google\.[a-z.]+\/(searchviewer|maps|search)\b/i;
+/** Third-party pages AI used for prompts that don't name the brand, per page: prompts, platforms, cited or only
+ *  retrieved, and whether it looks like a list or directory page (heuristic). Plus ChatGPT's searches per prompt. */
+export function listingTargets(projectId, { limit = 60 } = {}) {
+  const p = get("SELECT * FROM projects WHERE id=?", projectId) || fail(404, "Project not found");
+  const last = get("SELECT id, started_at FROM ai_runs WHERE project_id=? AND status IN ('done','stopped') ORDER BY id DESC LIMIT 1", p.id);
+  if (!last) return { run: null, pages: [], searches: [] };
+  const b = brandMatcher(p);
+  const rows = all("SELECT prompt, platform, mentioned, sources, extra FROM ai_results WHERE run_id=? AND error IS NULL", last.id);
+  const pages = new Map(), searches = [];
+  const add = (s, r, how) => {
+    if (!s.url || b.isOwn(s.domain) || SE_PAGE.test(s.url)) return;
+    const k = String(s.url).replace(/#.*$/, "").replace(/[?&]utm_[^&]*/g, "").replace(/\?$/, "");
+    const e = pages.get(k) || { url: k, domain: s.domain, title: s.title || "", prompts: new Set(), platforms: new Set(), cited: 0, retrieved: 0 };
+    e.prompts.add(r.prompt); e.platforms.add(r.platform); e[how]++; if (!e.title && s.title) e.title = s.title;
+    pages.set(k, e);
+  };
+  for (const r of rows) {
+    const extra = JSON.parse(r.extra || "null");
+    if (extra?.fanOut?.length) searches.push({ prompt: r.prompt, platform: r.platform, mentioned: Boolean(r.mentioned), queries: extra.fanOut });
+    if (r.mentioned) continue;
+    for (const s of JSON.parse(r.sources || "[]")) if (!s.organic) add(s, r, "cited");
+    for (const s of extra?.retrieved || []) add(s, r, "retrieved");
+  }
+  return { run: last, searches,
+    pages: [...pages.values()].map((e) => ({ url: e.url, domain: e.domain, title: e.title, prompts: [...e.prompts], platforms: [...e.platforms],
+      cited: e.cited, retrieved: e.retrieved, listPage: LIST_PAGE.test(`${e.title} ${e.url}`) }))
+      .sort((x, y) => y.prompts.length - x.prompts.length || y.listPage - x.listPage || y.cited - x.cited).slice(0, limit) };
+}
+
 export function register({ routes, cli }) {
   const project = (id) => get("SELECT * FROM projects WHERE id=?", Number(id)) || fail(404, "Project not found");
   routes.push(["GET", /^\/api\/projects\/(\d+)\/visibility\/suggestions$/, ([id]) => promptSuggestions(project(id).id)]);
   routes.push(["GET", /^\/api\/projects\/(\d+)\/visibility\/trends$/, ([id]) => visibilityTrends(project(id).id)]);
   routes.push(["GET", /^\/api\/projects\/(\d+)\/visibility\/sources$/, ([id]) => sourceMapping(project(id).id)]);
+  routes.push(["GET", /^\/api\/projects\/(\d+)\/visibility\/listing-targets$/, ([id]) => listingTargets(project(id).id)]);
   routes.push(["GET", /^\/api\/projects\/(\d+)\/visibility\/schedule$/, ([id]) => getSchedule(project(id).id)]);
   routes.push(["PUT", /^\/api\/projects\/(\d+)\/visibility\/schedule$/, ([id], q, body) => saveSchedule(project(id).id, body)]);
   if (cli) return; // the scheduled task outside the app doesn't start paid runs

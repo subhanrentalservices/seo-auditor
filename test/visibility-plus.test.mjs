@@ -139,3 +139,20 @@ test("cited sources → own pages: pages AI cites, and the best own page for pro
   assert.ok(!m.prompts.some((x) => x.prompt === "google only" || x.prompt.startsWith("who does")));
   assert.deepEqual(V.sourceMapping(newProject("norun").id), { run: null, ownCited: [], prompts: [] });
 });
+
+test("listing targets: other sites' pages for prompts that don't name the brand, list pages flagged, own site and Google viewers left out", () => {
+  const p = newProject("listpanels");
+  addPrompts(p.id, ["best panel beater springfield", "listpanels reviews"]);
+  const rid = addRun(p.id, "2026-11-02 05:00:00");
+  const extra = JSON.stringify({ fanOut: ["panel beater springfield top rated"], retrieved: [{ domain: "allstars.example", url: "https://allstars.example/best/panel-beaters/springfield", title: "Panel beaters in Springfield, most reviewed" }] });
+  run("INSERT INTO ai_results (run_id, prompt, platform, present, mentioned, cited, sources, brands, excerpt, extra) VALUES (?,?,?,?,?,?,?,?,?,?)", rid, "best panel beater springfield", "chatgpt", 1, 0, 0,
+    JSON.stringify([{ domain: "crashco.example", url: "https://crashco.example/?utm_source=chatgpt.com", title: "Crash Co" }, { domain: "listpanels.example.com", url: "https://listpanels.example.com/" }]), "[]", "", extra);
+  addResult(rid, "best panel beater springfield", "google", { sources: [{ domain: "google.com", url: "https://www.google.com/searchviewer/10?svid=x", title: "Some shop" }, { domain: "crashco.example", url: "https://crashco.example/" }, { domain: "x.example", url: "https://x.example/", organic: true }] });
+  addResult(rid, "listpanels reviews", "chatgpt", { mentioned: 1, sources: [{ domain: "rival.example", url: "https://rival.example/" }] }); // names the brand: skipped
+  const r = V.listingTargets(p.id);
+  assert.deepEqual(r.pages.map((e) => [e.url, e.prompts.length, e.platforms.sort().join("+"), e.cited, e.retrieved, e.listPage]), [
+    ["https://allstars.example/best/panel-beaters/springfield", 1, "chatgpt", 0, 1, true], // same prompt count: list pages first
+    ["https://crashco.example/", 1, "chatgpt+google", 2, 0, false]]);
+  assert.deepEqual(r.searches, [{ prompt: "best panel beater springfield", platform: "chatgpt", mentioned: false, queries: ["panel beater springfield top rated"] }]);
+  assert.deepEqual(V.listingTargets(newProject("emptylist").id), { run: null, pages: [], searches: [] });
+});

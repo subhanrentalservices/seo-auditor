@@ -53,6 +53,17 @@ test("ChatGPT: rank comes from the answer's numbered list when the business card
   assert.deepEqual(listedNames(md), ["Acme Motors — Springfield", "Crash Co"]);
 });
 
+test("ChatGPT: keeps the searches it ran and the pages it read without citing (what the network panel shows)", async () => {
+  const { parseChatGpt } = await import("../src/visibility.mjs");
+  const r = parseChatGpt({ markdown: "Try Crash Co.", fan_out_queries: ["best panel beater springfield", "panel beater springfield reviews", "best panel beater springfield"],
+    sources: [{ domain: "crashco.com.au", url: "https://crashco.com.au/", title: "Crash Co" }],
+    search_results: [{ url: "https://crashco.com.au/", domain: "crashco.com.au" }, { url: "https://bestof.example/best/panel-beaters/springfield", domain: "bestof.example", title: "10 best panel beaters" },
+      { url: "https://bestof.example/best/panel-beaters/springfield", domain: "bestof.example" }] }, b);
+  assert.deepEqual(r.extra.fanOut, ["best panel beater springfield", "panel beater springfield reviews"]);
+  assert.deepEqual(r.extra.retrieved, [{ domain: "bestof.example", url: "https://bestof.example/best/panel-beaters/springfield", title: "10 best panel beaters" }]);
+  assert.deepEqual(parseChatGpt({ markdown: "x", items: [{ type: "chat_gpt_text", fan_out_queries: [{ query: "q one" }] }] }, b).extra.fanOut, ["q one"]);
+});
+
 test("Gemini: numbered headings are picks; category headings don't push the brand down", () => {
   const picks = parseGemini({ markdown: "Options:\n\n### 1. Acme Motors\n* **Address:** 5 Main St\n\n### 2. Crash Co\n* **Focus:** towing", sources: [] }, b);
   assert.equal(picks.rank, 1);

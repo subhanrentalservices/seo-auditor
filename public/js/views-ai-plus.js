@@ -15,7 +15,8 @@ VIEWS.visibility = async (ctx) => {
   const [own, sug, sch, tr, src, st] = await Promise.all([base(ctx), api(`/api/projects/${pid}/visibility/suggestions`).catch(() => null),
     api(`/api/projects/${pid}/visibility/schedule`).catch(() => null), api(`/api/projects/${pid}/visibility/trends`).catch(() => null),
     api(`/api/projects/${pid}/visibility/sources`).catch(() => null), api("/api/dfs/status").catch(() => null)]);
-  return [...[own].flat(), trendCard(tr), sourcesCard(src), h("div", { class: "grid g2" }, suggestionsCard(ctx, sug), scheduleCard(ctx, sch, st))];
+  const lt = await api(`/api/projects/${pid}/visibility/listing-targets`).catch(() => null);
+  return [...[own].flat(), trendCard(tr), sourcesCard(src), listingCard(lt), h("div", { class: "grid g2" }, suggestionsCard(ctx, sug), scheduleCard(ctx, sch, st))];
 };
 
 function suggestionsCard(ctx, sug) {
@@ -82,4 +83,14 @@ function sourcesCard(m) {
       table([{ label: "Prompt", key: "prompt" }, { label: "Cited instead", get: (e) => e.cited.map((c) => `${c.domain} (${c.answers})`).join(", ") },
         { label: "Your page", get: (e) => (e.ownPage ? [link(e.ownPage.url, e.ownPage.title || shortUrl(e.ownPage.url)), h("div", { class: "small muted" }, e.ownPage.via)] : h("span", { class: "down" }, "none: content gap")) }],
       m.prompts, { empty: "Every prompt with sources cited your site." })));
+}
+
+function listingCard(m) {
+  if (!m?.run || (!m.pages.length && !m.searches.length)) return null;
+  return h("div", { class: "grid g2" },
+    h("div", { class: "card" }, h("h2", {}, "Pages to get listed on"), h("p", { class: "small muted" }, `Run of ${day(m.run.started_at)}. Other sites' pages AI cited (or ChatGPT read) for prompts that don't name you. "List" pages (best-of lists, directories) are ones a business can ask to be added to; a heuristic. Earn a place honestly: no paid fake reviews.`),
+      table([{ label: "Page", get: (e) => [link(e.url, e.title || shortUrl(e.url)), e.listPage ? h("span", { class: "small" }, " list") : null] }, { label: "Prompts", num: true, get: (e) => e.prompts.length },
+        { label: "Platforms", get: (e) => e.platforms.join(", ") }, { label: "Cited / read", get: (e) => `${e.cited} / ${e.retrieved}` }], m.pages, { empty: "No other sites' pages in this run." })),
+    h("div", { class: "card" }, h("h2", {}, "ChatGPT's own searches"), h("p", { class: "small muted" }, "The searches ChatGPT ran to answer each prompt (OpenAI: it rewrites a question into targeted searches sent to its search partners). Pages that rank for these get read. Runs from 2 Nov 2026 on."),
+      table([{ label: "Prompt", get: (e) => [e.prompt, e.mentioned ? h("span", { class: "small muted" }, " (names you)") : null] }, { label: "Searches", get: (e) => e.queries.join(" · ") }], m.searches, { empty: "None stored yet: the next ChatGPT run records them." })));
 }
