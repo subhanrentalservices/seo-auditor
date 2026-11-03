@@ -77,4 +77,35 @@ function compareForm(ctx) {
     h("div", { class: "stack", style: { gap: "6px" } }, mine, theirs, h("div", { class: "row" }, kw, btn)), out);
 }
 
-VIEWS.competitors = async (ctx) => [gapForm(ctx), compareForm(ctx)];
+// Link gap (REQ-086): sites that link to 2+ competitors but not to you (src/link-gap.mjs). Paid: one DataForSEO call
+// per competitor plus one for your site, on the owner's button.
+const KIND = { listing: ["up", "Business listing: join it yourself"], site: ["", "Article / news / association: earn it"], spam: ["down", "Likely spam or link network: leave it"] };
+function linkGapForm(ctx) {
+  const input = field("rival.com.au, other-rival.com, third.com.au", "420px");
+  const out = h("div", {});
+  const go = async (e) => {
+    e?.preventDefault();
+    btn.disabled = true; btn.textContent = "Reading links…";
+    try {
+      const r = await api(`/api/projects/${ctx.project.id}/link-gap`, { method: "POST", body: { domains: input.value } });
+      mount(out,
+        h("p", { class: "small muted" }, `Sites read: ${Object.entries(r.competitors).map(([d, n]) => `${d} ${num(n)}`).join(" · ")} · yours (${r.own}) ${num(r.ownLinks)}. `,
+          h("b", {}, `${num(r.rows.length)} sites link to 2+ competitors but not to you`), ` (${r.counts.listing} listings, ${r.counts.site} articles/sites, ${r.counts.spam} likely spam).`),
+        r.errors.length ? h("p", { class: "small", style: { color: "var(--warn-ink)" } }, r.errors.map((x) => `${x.domain}: ${x.error}`).join(" · ")) : null,
+        r.rows.length ? table([
+          { label: "Site", get: (x) => h("a", { href: `https://${x.domain}/`, target: "_blank", rel: "noopener" }, x.domain) },
+          { label: "Links to", get: (x) => `${x.count}: ${x.competitors.join(", ")}` },
+          { label: "Rank", num: true, get: (x) => num(x.rank) },
+          { label: "What to do", get: (x) => { const [c, l] = KIND[x.kind]; return h("span", { class: `small ${c}` }, l); } },
+        ], r.rows) : h("p", {}, "No site links to two or more of these competitors without also linking to you."));
+    } catch (err) { toast(err.message); }
+    finally { btn.disabled = false; btn.textContent = "Find link gaps"; }
+  };
+  const btn = h("button", { class: "btn" }, "Find link gaps");
+  return h("form", { class: "card", onsubmit: go }, h("h2", {}, "Sites that link to your competitors but not to you"),
+    h("p", { class: "hint" }, "Paid: one DataForSEO call per competitor (up to 5) plus one for your site; the monthly budget applies. ",
+      "Join the business listings yourself, and earn articles with something worth citing. Never buy links, swap links or join link networks: Google treats those as link spam."),
+    h("div", { class: "row" }, input, btn), out);
+}
+
+VIEWS.competitors = async (ctx) => [gapForm(ctx), compareForm(ctx), linkGapForm(ctx)];

@@ -23,7 +23,7 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/audits/:auditId/export/issues.csv` | Issues CSV (also `pages.csv` with custom extraction columns, and `links.csv`). |
 | any | `/lv/…`, `/api/s/…`, `/s/…`, `/fonts/…` | Link building: passed to the link engine on 127.0.0.1:4561. |
 
-## Routes (126)
+## Routes (127)
 
 ### core (server.mjs, api.mjs)
 
@@ -280,6 +280,12 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | Method | Path | Parameters and notes |
 |---|---|---|
 | POST | `/api/projects/:projectId/competitor-pages` | body: `domains` (list). Pages in a competitor's sitemap that your site doesn't have. |
+
+### link-gap.mjs
+
+| Method | Path | Parameters and notes |
+|---|---|---|
+| POST | `/api/projects/:projectId/link-gap` | body: `domains` (2-5 competitor domains), optional `min` (1 or 2). Paid: one DataForSEO referring-domains call per competitor plus one for your site. Returns sites linking to 2+ competitors but not to you, labelled listing / site / spam. |
 
 ### kw-ideas.mjs
 

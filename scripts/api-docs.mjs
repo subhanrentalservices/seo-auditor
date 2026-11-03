@@ -111,6 +111,7 @@ export const NOTES = {
   "GET /api/branding": "App-wide report branding.",
   "PUT /api/branding": "body: `name`, `logo` (data URI), `primary`, `accent` (#rrggbb), `whiteLabel`.",
   [`POST /api/projects/${P}/page-compare`]: "body: `mine`, `theirs` (URLs), `keyword`. Fetches the two pages once and compares them.",
+  [`POST /api/projects/${P}/link-gap`]: "body: `domains` (2-5 competitor domains), optional `min` (1 or 2). Paid: one DataForSEO referring-domains call per competitor plus one for your site. Returns sites linking to 2+ competitors but not to you, labelled listing / site / spam.",
   [`POST /api/projects/${P}/competitor-pages`]: "body: `domains` (list). Pages in a competitor's sitemap that your site doesn't have.",
   [`GET /api/projects/${P}/keyword-ideas`]: "Stored keyword ideas (Google Autocomplete) and job status.",
   [`POST /api/projects/${P}/keyword-ideas`]: "Starts collecting ideas from Autocomplete. body: `az` (also a–z modifiers).",
