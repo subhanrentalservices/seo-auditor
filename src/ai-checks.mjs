@@ -17,6 +17,8 @@ export const AI_CHECKS = {
   ai_no_date: ["notice", "No published/updated date", "AI systems prefer current information and need a date to judge it.", "Show a visible 'Last updated' date and add dateModified to schema."],
   ai_no_citable_block: ["notice", "No self-contained passage of 100–180 words (experimental)", "Experimental, not a Google requirement: Google's AI optimisation guide says chunking content for AI isn't needed. Long self-contained answers may still be easier to quote.", "Add one complete answer passage per key question (about 130–170 words)."],
   ai_no_question_headings: ["notice", "No question-style headings (experimental)", "Experimental, not a Google requirement: headings phrased like customer questions can make answers easier to find.", "Phrase some H2/H3 as the questions customers ask."],
+  ai_question_answer_late: ["notice", "Question headings not answered straight away (experimental)", "Experimental, not a Google requirement: Google says AI Overviews and AI Mode need no special optimisation. When the first sentence under a question heading answers it, a reader (or an answer engine) gets the answer without reading on.", "Start the text under each question heading with a short direct answer (one or two sentences), then the detail."],
+  ai_no_lists_tables: ["notice", "Long wall of text: no list, table or short sections (experimental)", "Experimental, not a Google requirement: steps, options and comparisons are easier to scan and quote as a numbered list or a table.", "Where the content really is steps, options or a comparison, show it as a list or a table."],
   ai_no_sources: ["notice", "Long article without outbound sources", "Citing primary sources (government, standards, studies) makes claims verifiable.", "Link 1–3 authoritative sources for facts and figures."],
   ai_thin: ["warning", "Too little content to be cited (under 300 words)", "Pages with very little text rarely contain a quotable answer.", "Add specific, original detail or merge into a stronger page."],
 };
@@ -54,6 +56,10 @@ export function aiPageIssues(p) {
   if (p.words >= 400 && !d.citableBlocks) out.push(["ai_no_citable_block", ""]);
   if (p.words >= 600 && d.headings >= 3 && !d.questionHeadings) out.push(["ai_no_question_headings", ""]);
   if (p.words >= 600 && !d.externalLinks) out.push(["ai_no_sources", ""]);
+  if (d.qLate) out.push(["ai_question_answer_late", `${d.qLate} of ${d.qLate + (d.qAnswered || 0)}: ${d.qLateExample}`]);
+  // A wall of text: no list or table and under one heading per 150 words (short labelled sections read like a list).
+  // formats is undefined in older audits: not flagged.
+  if (p.words >= 800 && d.formats === 0 && (d.headings || 0) < p.words / 150) out.push(["ai_no_lists_tables", `${p.words} words, ${d.headings || 0} headings`]);
   return out;
 }
 

@@ -20,6 +20,7 @@ import { siteProbeIssues } from "./site-probes.mjs";
 import { robotsTxtIssues } from "./robots-txt.mjs";
 import { siteRuleIssues, saveLastmods, lastmodAccuracyIssues } from "./site-rules.mjs";
 import { pageSignals, signalSiteIssues } from "./page-signals.mjs";
+import { answerLayout } from "./answer-layout.mjs";
 import { videoUrlsOf, videoFileIssues } from "./video-checks.mjs";
 import { CTA, ctaFoldIssues } from "./fold-check.mjs";
 import { brandTerms } from "./trends.mjs";
@@ -261,6 +262,7 @@ export function parseHtml(html, url) {
   const firstH1 = hs.findIndex((h) => h.name === "h1");
   if (firstH1 > 0) d.headingsBeforeH1 = firstH1;
   d.h2Count = hs.filter((h) => h.name === "h2").length;
+  Object.assign(d, answerLayout($, $c, chrome)); // question headings answered straight away; lists/tables (answer-layout.mjs)
   const targets = new Set(); // ids a table of contents can point at: the heading, its section wrapper, or an empty anchor before it
   for (const h of hs) {
     if (h.name === "h1") continue;
