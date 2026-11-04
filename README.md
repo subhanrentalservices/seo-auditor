@@ -42,11 +42,11 @@ SmartScreen shows "More info → Run anyway"; on macOS right-click → Open the 
 ## Checks
 
 <!-- generated:numbers (node scripts/readme-numbers.mjs) -->
-**191 checks**: 32 errors, 59 warnings, 100 notices.
+**192 checks**: 32 errors, 59 warnings, 101 notices.
 
 | Group | Checks |
 |---|---|
-| SEO (on-page, content, links, structured data, sitemaps, hreflang…) | 89 |
+| SEO (on-page, content, links, structured data, sitemaps, hreflang…) | 90 |
 | Crawlability (status codes, redirects, robots.txt, canonicals, rendering…) | 74 |
 | AI search (AI crawlers, answer-ready content; scored as AI Readiness) | 15 |
 | Core Web Vitals (field data first, Lighthouse as fallback) | 6 |

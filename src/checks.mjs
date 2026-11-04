@@ -52,6 +52,7 @@ export const CHECKS = {
   canonical_elsewhere: ["notice", "Canonical points to another page", "This page asks not to be indexed in its own right. Fine if intended.", "Check that the canonical target is the right version."],
   not_in_sitemap: ["notice", "Indexable pages missing from the sitemap", "Sitemaps help discovery of every page you want indexed.", "Add them to the XML sitemap."],
   missing_og: ["notice", "Missing Open Graph tags", "Shared links show a poor preview on social media and chat apps.", "Add og:title, og:description and og:image."],
+  og_incomplete: ["notice", "Open Graph tags incomplete (share previews; not a Google ranking factor)", "Facebook, LinkedIn, WhatsApp, Slack and X build a link preview from these tags. The Open Graph protocol lists og:title, og:type, og:image and og:url as required on every page (ogp.me); og:description and og:site_name fill the summary and the site line. twitter:card is the one X tag with no Open Graph fallback: it picks the card type, e.g. summary_large_image for a large image. Google reads og:site_name only on the home page, as one hint for the site name in results (site names doc).", "Add the tags listed in the detail to the page's <head>. twitter:title, twitter:description and twitter:image aren't needed: X falls back to og:title, og:description and og:image. twitter:site is only for a site with an X account; leave it out rather than invent one."],
   missing_jsonld: ["notice", "No structured data", "Structured data helps Google understand the page and is required for rich results (only some types still earn one: see Google's search gallery). It is not a ranking factor on its own.", "Add JSON-LD in the server HTML for what the page really is: Organization or LocalBusiness on the home page, Article/BlogPosting, Product, BreadcrumbList, VideoObject. FAQ and HowTo no longer earn rich results (FAQ stopped 7 May 2026, HowTo 2023)."],
   many_links: ["notice", "Too many on-page links (over 300)", "Link equity is spread thin and the page is hard to use.", "Trim navigation and repeated links."],
   external_nofollow_all: ["notice", "All external links are nofollow", "Normal editorial links don't need nofollow.", "Use nofollow only for paid/untrusted links (sponsored/ugc)."],
@@ -312,6 +313,7 @@ export function pageIssues(p, ctx) {
   if (p.indexable) for (const [id, det] of schemaPageIssues(d, ctx)) add(id, det);
   if (!d.jsonld && !d.microdata && p.indexable) add("missing_jsonld");
   if (!d.og && p.indexable) add("missing_og");
+  else if (d.ogMissing?.length && p.indexable) add("og_incomplete", d.ogMissing.join(", "));
   if (d.mixed) add("mixed_content", `${d.mixed} resource(s), e.g. ${d.mixedExample}`);
   if (d.hreflangBad) add("hreflang_issue", d.hreflangBad);
   if (p.outlinks > 300) add("many_links", `${p.outlinks} links`);

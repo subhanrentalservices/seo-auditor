@@ -137,6 +137,10 @@ export function parseHtml(html, url) {
   d.lang = $("html").attr("lang") || "";
   d.viewport = $('meta[name="viewport"]').length > 0;
   d.og = $('meta[property="og:title"]').length > 0 && $('meta[property="og:image"]').length > 0;
+  // The rest of a share preview (2026-11-04): ogp.me's other required tags (og:type, og:url), the summary and site
+  // line, and twitter:card, the one X tag with no Open Graph fallback. twitter:title/description/image fall back to og:.
+  const ogHas = (k) => $(`meta[property="${k}"], meta[name="${k}"]`).toArray().some((e) => ($(e).attr("content") || "").trim());
+  d.ogMissing = ["og:description", "og:type", "og:url", "og:site_name", "twitter:card"].filter((k) => !ogHas(k));
   d.jsonld = 0; d.jsonldInvalid = 0; d.schemaTypes = [];
   const faqNames = [], ld = []; let bizRating = false, crumbs = false;
   const declared = { m: [], p: [] }; // dates from JSON-LD and meta tags (m = modified, p = published)
