@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS ga4_key_events (project_id INTEGER NOT NULL REFERENCE
 CREATE TABLE IF NOT EXISTS ga4_ai (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   source TEXT NOT NULL, landing_page TEXT NOT NULL, assistant TEXT, sessions INTEGER, engaged_sessions INTEGER, key_events REAL,
   PRIMARY KEY (project_id, source, landing_page));
+CREATE TABLE IF NOT EXISTS ga4_channels (project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL, source TEXT NOT NULL, medium TEXT NOT NULL, campaign TEXT NOT NULL, sessions INTEGER, engaged_sessions INTEGER, key_events REAL,
+  PRIMARY KEY (project_id, channel, source, medium, campaign));
 `);
 
 export const API = "https://analyticsdata.googleapis.com/v1beta";
@@ -64,19 +67,23 @@ export function friendlyError(e, property) {
   return redact(msg, secretValues()).slice(0, 500);
 }
 
-/** Fetches the four reports and saves them. call: runReport transport (tests mock it). */
+/** Fetches the five reports and saves them. call: runReport transport (tests mock it). */
 export async function refreshGa4(project, { call = ga4Call, now = Date.now() } = {}) {
   const s = projectSettings(project), property = propertyId(s.ga4Property);
   if (!property) fail(400, "Enter this website's GA4 Property ID in Settings (GA4 Admin → Property settings → Property ID, digits only).");
   const end = new Date(now - 864e5), r28 = { startDate: iso(new Date(end - 27 * 864e5)), endDate: iso(end) }, r90 = { startDate: iso(new Date(end - 89 * 864e5)), endDate: iso(end) };
   const rep = (body, max) => runReport(property, body, call, max).catch((e) => ({ error: friendlyError(e, property) }));
-  const [pages, daily, keyEvents, ai] = await Promise.all([
+  const [pages, daily, keyEvents, ai, channels] = await Promise.all([
     rep({ dateRanges: [r28], dimensions: [{ name: "landingPage" }], metrics: METRICS, dimensionFilter: ORGANIC, orderBys: [{ metric: { metricName: "sessions" }, desc: true }] }),
     rep({ dateRanges: [r90], dimensions: [{ name: "date" }], metrics: METRICS, dimensionFilter: ORGANIC }),
     rep({ dateRanges: [r28], dimensions: [{ name: "landingPage" }, { name: "eventName" }], metrics: [{ name: "keyEvents" }], dimensionFilter: ORGANIC,
       metricFilter: { filter: { fieldName: "keyEvents", numericFilter: { operation: "GREATER_THAN", value: { int64Value: "0" } } } } }),
     rep({ dateRanges: [r28], dimensions: [{ name: "sessionSource" }, { name: "landingPage" }], metrics: METRICS.slice(0, 3),
       dimensionFilter: { filter: { fieldName: "sessionSource", stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_REGEX, caseSensitive: false } } } }),
+    // Every channel, not only organic (2026-11-04): engagement and bounce rate per channel, and Google Ads clicks that
+    // arrive without a campaign name (google / cpc, "(not set)"), i.e. Ads not linked to this property.
+    rep({ dateRanges: [r28], dimensions: ["sessionDefaultChannelGroup", "sessionSource", "sessionMedium", "sessionCampaignName"].map((name) => ({ name })),
+      metrics: METRICS.slice(0, 3) }),
   ]);
   const errors = {};
   db.exec("BEGIN");
@@ -100,6 +107,12 @@ export async function refreshGa4(project, { call = ga4Call, now = Date.now() } =
       const ins = db.prepare("INSERT OR REPLACE INTO ga4_ai (project_id, source, landing_page, assistant, sessions, engaged_sessions, key_events) VALUES (?,?,?,?,?,?,?)");
       for (const r of ai) ins.run(project.id, r.d[0], r.d[1], assistantOf(r.d[0]), ...r.m);
     } else errors.ai = ai.error;
+    if (Array.isArray(channels)) {
+      run("DELETE FROM ga4_channels WHERE project_id=?", project.id);
+      const ins = db.prepare(`INSERT INTO ga4_channels (project_id, channel, source, medium, campaign, sessions, engaged_sessions, key_events) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT DO UPDATE SET sessions=sessions+excluded.sessions, engaged_sessions=engaged_sessions+excluded.engaged_sessions, key_events=key_events+excluded.key_events`);
+      for (const r of channels) ins.run(project.id, ...r.d.map((v) => v || "(not set)"), ...r.m);
+    } else errors.channels = channels.error;
     run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `ga4:${project.id}`, JSON.stringify({ property, ...r28, trendStart: r90.startDate, fetchedAt: new Date(now).toISOString(), errors }));
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
@@ -112,9 +125,15 @@ export function ga4Data(projectId) {
   const property = propertyId(projectSettings(p).ga4Property);
   const m = JSON.parse(get("SELECT value FROM meta WHERE key=?", `ga4:${projectId}`)?.value || "null");
   const out = { configured: Boolean(property), property, mode: authMode(), fetchedAt: m?.fetchedAt || null, startDate: m?.startDate || null, endDate: m?.endDate || null, errors: m?.errors || {} };
-  if (!m) return { ...out, daily: [], pages: [], keyEvents: [], ai: { assistants: [], rows: [] }, totals: null };
+  if (!m) return { ...out, daily: [], pages: [], keyEvents: [], ai: { assistants: [], rows: [] }, channels: [], adsUnlinked: null, totals: null };
+  // GA4: bounce rate = sessions that weren't engaged (engaged = over 10 s, a key event or 2+ page views) = 1 - engagement rate.
+  const channels = all(`SELECT channel, SUM(sessions) sessions, SUM(engaged_sessions) engagedSessions, SUM(key_events) keyEvents
+    FROM ga4_channels WHERE project_id=? GROUP BY channel ORDER BY sessions DESC`, projectId)
+    .map((c) => ({ ...c, engagementRate: c.sessions ? c.engagedSessions / c.sessions : null, bounceRate: c.sessions ? 1 - c.engagedSessions / c.sessions : null }));
+  const ads = get(`SELECT SUM(sessions) sessions, SUM(key_events) keyEvents FROM ga4_channels WHERE project_id=? AND lower(source)='google' AND lower(medium)='cpc'
+    AND campaign LIKE '(%)'`, projectId); // GA4 placeholders: "(not set)", and "(organic)" seen on google / cpc when Ads isn't linked
   const totals = get(`SELECT SUM(sessions) sessions, SUM(engaged_sessions) engagedSessions, SUM(key_events) keyEvents, SUM(users) users FROM ga4_pages WHERE project_id=?`, projectId);
-  return { ...out, totals,
+  return { ...out, totals, channels, adsUnlinked: ads?.sessions ? { sessions: ads.sessions, keyEvents: ads.keyEvents || 0 } : null,
     daily: all("SELECT date, sessions, engaged_sessions engagedSessions, key_events keyEvents, users FROM ga4_daily WHERE project_id=? ORDER BY date", projectId),
     pages: all("SELECT landing_page page, sessions, engaged_sessions engagedSessions, key_events keyEvents, users FROM ga4_pages WHERE project_id=? ORDER BY sessions DESC LIMIT 200", projectId),
     keyEvents: all("SELECT landing_page page, event_name event, key_events keyEvents FROM ga4_key_events WHERE project_id=? ORDER BY key_events DESC LIMIT 200", projectId),

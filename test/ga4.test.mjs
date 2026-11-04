@@ -29,6 +29,9 @@ function mockCall(overrides = {}) {
     if (dims === "date") return resp([row(["20261027"], [10, 7, 1, 9]), row(["20261028"], [12, 8, 0, 11])]);
     if (dims === "landingPage,eventName") return resp([row(["/claims", "generate_lead"], [7]), row(["/", "click_to_call"], [4])]);
     if (dims === "sessionSource,landingPage") return resp([row(["chatgpt.com", "/claims"], [5, 4, 1]), row(["perplexity.ai", "/"], [2, 1, 0]), row(["copilot.microsoft.com", "/"], [1, 1, 0])]);
+    if (dims === "sessionDefaultChannelGroup,sessionSource,sessionMedium,sessionCampaignName") return resp([row(["Direct", "(direct)", "(none)", "(direct)"], [64, 36, 3]),
+      row(["Organic Search", "google", "organic", "(organic)"], [15, 11, 0]), row(["Organic Search", "bing", "organic", "(organic)"], [2, 2, 0]),
+      row(["Paid Search", "google", "cpc", "(not set)"], [5, 0, 0]), row(["Paid Search", "google", "cpc", "(organic)"], [6, 4, 0])]);
     throw new Error("unexpected report " + dims);
   };
   return { call, asked };
@@ -63,10 +66,10 @@ test("runReport pages 10,000 rows at a time and turns string metrics into number
   assert.deepEqual(rows[0], { d: ["/p0"], m: [7] });
 });
 
-test("refresh sends the four reports with the right bodies and stores them", async () => {
+test("refresh sends the five reports with the right bodies and stores them", async () => {
   const { call, asked } = mockCall();
   const d = await refreshGa4(p870(), { call, now: NOW });
-  assert.equal(asked.length, 4);
+  assert.equal(asked.length, 5);
   assert.ok(asked.every((a) => a.property === "123456789"));
   const by = Object.fromEntries(asked.map((a) => [a.body.dimensions.map((x) => x.name).join(","), a.body]));
   const organic = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } };
@@ -118,4 +121,19 @@ test("no property: a plain message and nothing is fetched; GET is empty but vali
   const d = ga4Data(871);
   assert.deepEqual([d.configured, d.fetchedAt, d.pages.length], [false, null, 0]);
   assert.equal(all("SELECT * FROM ga4_pages WHERE project_id=871").length, 0);
+});
+
+test("all channels: bounce rate is 1 - engagement rate per channel; Google Ads clicks with no campaign (any GA4 placeholder) are flagged", async () => {
+  const { call, asked } = mockCall();
+  const d = await refreshGa4(p870(), { call, now: NOW });
+  const ch = asked.find((a) => a.body.dimensions.length === 4).body;
+  assert.equal(ch.dimensionFilter, undefined, "every channel, not only organic");
+  assert.deepEqual(ch.metrics.map((m) => m.name), ["sessions", "engagedSessions", "keyEvents"]);
+  assert.deepEqual(d.channels.map((c) => [c.channel, c.sessions, Math.round(c.bounceRate * 100)]), [["Direct", 64, 44], ["Organic Search", 17, 24], ["Paid Search", 11, 64]]);
+  assert.ok(Math.abs(d.channels[0].engagementRate + d.channels[0].bounceRate - 1) < 1e-9);
+  assert.deepEqual(d.adsUnlinked, { sessions: 11, keyEvents: 0 });
+  const linked = mockCall({ "sessionDefaultChannelGroup,sessionSource,sessionMedium,sessionCampaignName": () => resp([row(["Paid Search", "google", "cpc", "Brand search"], [9, 6, 2])]) });
+  const d2 = await refreshGa4(p870(), { call: linked.call, now: NOW });
+  assert.equal(d2.adsUnlinked, null, "a named campaign means Ads is linked");
+  assert.equal(d2.channels[0].bounceRate, 1 - 6 / 9);
 });

@@ -24,7 +24,7 @@ const refreshBtn = (label, path, ctx) => { const b = h("button", { class: "btn p
   b.onclick = () => busy(b, async () => { await api(path, { method: "POST", body: {} }); toast("Updated"); ctx.app.refresh(); }); return b; };
 
 // ---------- Analytics (GA4) ----------
-const GA4_PARTS = { pages: "Organic landing pages", daily: "Organic trend", keyEvents: "Key events", ai: "AI referrals" };
+const GA4_PARTS = { pages: "Organic landing pages", daily: "Organic trend", keyEvents: "Key events", ai: "AI referrals", channels: "All channels" };
 VIEWS.analytics = async (ctx) => {
   const pid = ctx.project.id, base = ctx.project.start_url, d = await api(`/api/projects/${pid}/ga4`);
   const full = (p) => { try { return new URL(p, base).href; } catch { return p; } };
@@ -54,7 +54,13 @@ VIEWS.analytics = async (ctx) => {
       table([{ label: "Assistant", key: "assistant" }, { label: "Source", key: "source" }, { label: "Landing page", cls: "url", get: (r) => shortUrl(full(r.page), base) },
         { label: "Sessions", num: true, get: (r) => num(r.sessions) }, { label: "Key events", num: true, get: (r) => num(r.keyEvents) }], d.ai.rows)) : null,
     h("p", { class: "hint", style: { marginBottom: 0 } }, "Counted from the referring site GA4 records. Many AI visits arrive without a referrer (apps, copied links) and show as Direct, so this is a lower bound."));
-  return [setup, tiles, pages, events, ai];
+  const pctOr = (v) => (v == null ? "–" : pct(v));
+  const channels = h("div", { class: "card" }, h("h2", {}, "All channels (last 28 days)"),
+    d.adsUnlinked ? h("p", { class: "hint", style: { color: "var(--warn, #b45309)" } }, `${num(d.adsUnlinked.sessions)} Google Ads click session(s) arrived with no campaign name (google / cpc with a placeholder such as “(not set)” or “(organic)”), ${num(d.adsUnlinked.keyEvents)} key events. Usually Google Ads isn't linked to this GA4 property (GA4 Admin → Product links → Google Ads links) or auto-tagging is off, so campaign, cost and cost per click don't reach GA4 and cost per lead can't be worked out.`) : null,
+    table([{ label: "Channel", key: "channel" }, { label: "Sessions", num: true, get: (r) => num(r.sessions) }, { label: "Engagement rate", num: true, get: (r) => pctOr(r.engagementRate) },
+      { label: "Bounce rate", num: true, get: (r) => pctOr(r.bounceRate) }, { label: "Key events", num: true, get: (r) => num(r.keyEvents) }], d.channels || [], { empty: "No sessions in the last 28 days." }),
+    h("p", { class: "hint", style: { marginBottom: 0 } }, "GA4 bounce rate is the share of sessions that weren't engaged (engaged: over 10 seconds, a key event, or 2+ page views), so it is 100% minus the engagement rate. Compare channels with each other; a high bounce rate on one page type (contact, phone number) can be fine."));
+  return [setup, tiles, channels, pages, events, ai];
 };
 
 // ---------- Bing Webmaster Tools + IndexNow ----------
