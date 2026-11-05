@@ -5,6 +5,7 @@ import { schemaPageIssues } from "./schema.mjs";
 import { videoNotMain } from "./video-checks.mjs";
 import { EXTRA_CHECKS, CWV_CHECKS, extraPageIssues } from "./extra-checks.mjs";
 import { PDF_CHECKS, pdfPageIssues, isPdfType } from "./pdf.mjs";
+import { titleWidth, descWidth, TITLE_PX, DESC_PX } from "./text-width.mjs";
 
 export const CHECKS = {
   // ---------------- Errors ----------------
@@ -70,9 +71,9 @@ export const CHECKS = {
   // ---------------- Information: not Google ranking issues (REQ-044, Oct 2026) ----------------
   // Kept visible so nothing is hidden, as notices: they don't count toward Site Health. The numbers are this tool's
   // conventions, not Google limits.
-  title_too_long: ["notice", "Title over 65 characters (information: not a Google ranking issue)", "Google sets no length limit for the <title> and doesn't rank shorter titles higher. It truncates title links to fit the device width, so the end of a long title may be cut off in results (title links doc). 65 characters is this tool's rough estimate of where a cut can start.", "Nothing to fix for ranking. If the words that matter most come late, move them to the front so they survive a cut."],
+  title_too_long: ["notice", "Title likely cut off in results (information: not a Google ranking issue)", "Google sets no length limit for the <title> and doesn't rank shorter titles higher. It truncates title links to fit the device width, so the end of a long title may be cut off in results (title links doc). Width matters more than characters: this tool estimates the width in Arial 20 px, the desktop title font, and flags over 561 px (the limit crawlers such as Screaming Frog use) or over 65 characters.", "Nothing to fix for ranking. If the words that matter most come late, move them to the front so they survive a cut."],
   title_too_short: ["notice", "Title under 20 characters (information: not a Google ranking issue)", "Google sets no minimum title length. A very short title may not describe the page, and Google can then show a title link built from the page's headings or other text instead (title links doc).", "If the title doesn't say what the page is, make it descriptive and concise. A short, accurate title is fine."],
-  desc_length: ["notice", "Meta description short or long (information: not a Google ranking issue)", "The meta description isn't a Google ranking factor and has no length limit; Google truncates snippets to fit the device width and often writes its own snippet from the page text to match the search (snippets doc). The 70–170 character range is this tool's convention.", "Nothing to fix for ranking. If you want a say in the snippet, write a description that accurately summarises the page."],
+  desc_length: ["notice", "Meta description short or long (information: not a Google ranking issue)", "The meta description isn't a Google ranking factor and has no length limit; Google truncates snippets to fit the device width and often writes its own snippet from the page text to match the search (snippets doc). This tool flags under 70 characters, or over 170 characters or about 985 px wide in Arial 14 px (the desktop snippet width crawlers such as Screaming Frog use).", "Nothing to fix for ranking. If you want a say in the snippet, write a description that accurately summarises the page."],
   multiple_h1: ["notice", "Several H1 headings (information: not a Google issue)", "Google says several H1 elements on a page are fine: it uses headings to understand the page and doesn't count H1s (John Mueller, 2017 and 2019). A clear heading outline still helps readers and screen readers.", "Nothing to fix for Google. Keep headings meaningful and in a sensible order."],
   low_word_count: ["notice", "Under 200 words (information: not a Google ranking issue)", "Google has no minimum word count and says word count isn't a ranking factor (John Mueller); short pages such as contact or booking pages can do their job well. Pages that add nothing useful still struggle, whatever their length.", "Check the page gives visitors what they came for. Add detail only where it helps them; don't pad."],
   low_text_ratio: ["notice", "Low text-to-HTML ratio, under 10% (information: not a Google metric)", "Google doesn't use a text-to-HTML ratio. Very heavy markup can slow a page, and little visible text can mean a thin page, so it's a hint to look, nothing more.", "Only if the page is slow or thin: remove unneeded markup or add useful content."],
@@ -283,10 +284,10 @@ export function pageIssues(p, ctx) {
   if (p.bytes > 2 * 1024 * 1024) add("large_html", `${Math.ceil(p.bytes / 1024)} KB uncompressed; Googlebot reads only the first 2,048 KB`);
   if (!p.indexable && d.noindex) add("noindex_page", d.noindexSource || "");
   if (!p.title) add("missing_title");
-  else if (p.title.length > 65) add("title_too_long", `${p.title.length} chars`);
+  else if (p.title.length > 65 || titleWidth(p.title) > TITLE_PX) add("title_too_long", `${p.title.length} chars, ~${titleWidth(p.title)} px (cut likely past ${TITLE_PX} px)`);
   else if (p.title.length < 20) add("title_too_short", `${p.title.length} chars`);
   if (!p.description) add("missing_description");
-  else if (p.description.length < 70 || p.description.length > 170) add("desc_length", `${p.description.length} chars`);
+  else if (p.description.length < 70 || p.description.length > 170 || descWidth(p.description) > DESC_PX) add("desc_length", `${p.description.length} chars, ~${descWidth(p.description)} px`);
   if (!d.h1Count) add("missing_h1");
   else if (d.h1Count > 1) add("multiple_h1", `${d.h1Count} H1s`);
   if (p.title && p.h1 && p.title.trim().toLowerCase() === p.h1.trim().toLowerCase()) add("dup_title_h1");
