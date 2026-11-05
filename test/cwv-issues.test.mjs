@@ -80,3 +80,14 @@ test("applyCwvIssues replaces earlier cwv issues and recomputes the audit's coun
   applyCwvIssues(1, { id: 1, start_url: S + "/" }); // a re-run raises the same set, not twice
   assert.equal(get("SELECT COUNT(*) n FROM issues WHERE audit_id=1 AND check_id LIKE 'cwv%'").n, 2);
 });
+
+test("lab LCP from a slow computer says so (Lighthouse CPU benchmark at or below 1000), the value and severity stay", () => {
+  const found = by(cwvIssues({ start: S, labRows: [
+    { url: `${S}/slow`, lcp_ms: 3100, cls: 0, benchmark: 588 },
+    { url: `${S}/fast`, lcp_ms: 3100, cls: 0, benchmark: 1600 },
+    { url: `${S}/unknown`, lcp_ms: 3100, cls: 0 },
+  ] }));
+  assert.match(found["cwv_lcp_ni /slow"], /LCP 3\.1 s \(measured on a slow computer: Lighthouse CPU benchmark 588, it expects over 1000/);
+  assert.equal(found["cwv_lcp_ni /fast"], "Lab (Lighthouse, mobile), no field data for this page: LCP 3.1 s");
+  assert.equal(found["cwv_lcp_ni /unknown"], "Lab (Lighthouse, mobile), no field data for this page: LCP 3.1 s");
+});

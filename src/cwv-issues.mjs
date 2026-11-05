@@ -11,6 +11,12 @@ import { afterAudit } from "./runner.mjs";
 
 const METRICS = [["lcp", "largest_contentful_paint", "LCP", "lcp_ms"], ["inp", "interaction_to_next_paint", "INP", null], ["cls", "cumulative_layout_shift", "CLS", "cls"]];
 const fmt = (k, v) => (k === "cls" ? Number(v).toFixed(2) : k === "lcp" ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
+/** Lighthouse's own limit (core/gather/driver/environment.js, SLOW_CPU_BENCHMARK_INDEX_THRESHOLD): at or below this
+ *  CPU benchmark it warns that the device is slower than expected, and lab times (LCP, TBT) come out higher than
+ *  PageSpeed Insights measures on Google's servers. */
+export const SLOW_HOST_BENCHMARK = 1000;
+const hostNote = (lab) => (lab?.benchmark && lab.benchmark <= SLOW_HOST_BENCHMARK
+  ? ` (measured on a slow computer: Lighthouse CPU benchmark ${lab.benchmark}, it expects over ${SLOW_HOST_BENCHMARK}, so lab times run high; confirm with PageSpeed Insights)` : "");
 const share = (m) => (m.good === null || m.good === undefined ? "" : `, ${Math.round(m.good * 100)}% of visits good`);
 /** "poor" | "ni" | null for a value and [good, poor] limits (good ≤ first, poor > second). */
 export const rate = (v, [good, poor]) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : v > poor ? "poor" : v > good ? "ni" : null);
@@ -31,7 +37,7 @@ export function cwvIssues({ labRows = [], crux = null, start }) {
         if (r) add(`cwv_${k}_${r}`, url, `Field data (this page, phone, 28 days): ${label} p75 ${fmt(k, m.p75)}${share(m)}`);
       } else if (labKey && lab) {
         const r = rate(lab[labKey], FIELD_THRESHOLDS[cruxKey]);
-        if (r) add(`cwv_${k}_${r}`, url, `Lab (Lighthouse, mobile), no field data for this page: ${label} ${fmt(k, lab[labKey])}`);
+        if (r) add(`cwv_${k}_${r}`, url, `Lab (Lighthouse, mobile), no field data for this page: ${label} ${fmt(k, lab[labKey])}${hostNote(lab)}`);
       }
     }
   }
@@ -52,7 +58,8 @@ export function cwvIssues({ labRows = [], crux = null, start }) {
 export function applyCwvIssues(auditId, project) {
   const a = get("SELECT id, pages_crawled FROM audits WHERE id=?", auditId);
   if (!a) return [];
-  const labRows = all("SELECT url, lcp_ms, cls, error FROM cwv WHERE audit_id=? AND COALESCE(form_factor, 'mobile')='mobile'", auditId);
+  const labRows = all("SELECT url, lcp_ms, cls, error, details FROM cwv WHERE audit_id=? AND COALESCE(form_factor, 'mobile')='mobile'", auditId)
+    .map(({ details, ...r }) => { let b = null; try { b = JSON.parse(details || "{}").benchmark ?? null; } catch {} return { ...r, benchmark: b }; });
   const crux = cruxData(project.id);
   const found = cwvIssues({ labRows, crux: crux.enabled && crux.fetchedAt ? crux : null, start: project.start_url });
   db.exec("BEGIN");
