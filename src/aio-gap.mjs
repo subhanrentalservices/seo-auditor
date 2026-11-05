@@ -115,6 +115,35 @@ export function overviewSearches(projectId) {
     .map((r) => r.prompt);
 }
 
+const clip = (t, n) => { const w = String(t || "").split(/\s+/).filter(Boolean); return w.length > n ? `${w.slice(0, n).join(" ")} […]` : w.join(" "); };
+/**
+ * The reel's actual method (owner, 2026-11-05: "you are not following his methods"): give Claude the AI Overview answer,
+ * the full content of the pages it cites and the pages that rank, and your page, and ask what you're missing. This builds
+ * that brief as one Markdown text to paste into Claude (or for Claude Code to read). The word-overlap lists above are a
+ * quick first pass; the brief is where the real gap analysis happens.
+ */
+export function gapBrief({ keyword, answer, questions = [], pages = [], mine }) {
+  const page = (p, n) => [...[`Title: ${p.title || "(none)"}`, p.h1 ? `H1: ${p.h1}` : "", (p.h2s || []).length ? `Headings: ${p.h2s.join(" | ")}` : ""].filter(Boolean), "", clip(p.text, n)].join("\n");
+  return [
+    `# Gap analysis brief: "${keyword}"`,
+    "",
+    "Below is Google's AI Overview answer for this search, the pages it cites and the pages that rank for it, with their content, and then my page.",
+    "Compare my page with all of them and tell me everything I'm missing to be the page Google's AI Overview cites for this search:",
+    "1. Missing topics: subtopics, questions and sections these pages cover that mine doesn't.",
+    "2. Missing information: facts, figures, examples, steps, costs, timeframes, rules and recent (this year's) updates they give that mine doesn't. Say where each one comes from.",
+    "3. Content depth gaps: sections that exist on my page but are too thin compared with these pages.",
+    "4. Page-level differences: direct answer at the top, question headings, lists or tables, date, author, sources cited, structured data.",
+    "For each gap: what to add, where on my page, and whether it needs a fact only my business can confirm. Never copy their wording; suggest only what can be stated truthfully for my business.",
+    "",
+    "## Google's AI Overview answer",
+    answer ? String(answer).replace(/\[\[\d+\]\]\([^)]*\)/g, "") : "(no AI Overview showed for this search, or none was stored)",
+    "",
+    questions.length ? `## People also ask\n${questions.map((q) => `- ${q}`).join("\n")}\n` : "",
+    ...pages.filter((p) => !p.error).map((p, i) => `## Page ${i + 1} (${p.role}): ${p.url}\n${page(p, 1800)}\n`),
+    `## My page: ${mine.url}\n${page(mine, 3500)}`,
+  ].join("\n");
+}
+
 export async function aioGapReport(project, { mine, keyword, sources, answer } = {}, { ua = "Mozilla/5.0 (compatible; SEOAuditor/1.0; +local)", fetchPage = (u) => fetchFollow(u, ua) } = {}) {
   mine = String(mine || "").trim();
   keyword = String(keyword || "").trim();
@@ -160,11 +189,12 @@ export async function aioGapReport(project, { mine, keyword, sources, answer } =
   for (const u of theirs) pages.push(await read(u));
   const ok = pages.filter((p) => !p.error);
   const report = aioGaps({ mine: me, sources: ok, answer, keyword, questions });
+  const brief = gapBrief({ keyword, answer, questions, mine: me, pages: pages.map((p, i) => ({ ...p, role: role.get(theirs[i]).join(" + ") })) });
   return {
     ...report, from, aio, youCited, ownPos, answer: answer.slice(0, 1500),
     mine: { url: me.url, title: me.title, words: me.words },
     sources: pages.map((p, i) => ({ ...(p.error ? { url: p.url, error: p.error } : { url: p.url, title: p.title, words: p.words }), role: role.get(theirs[i]).join(" + ") })),
-    skipped: Math.max(0, skipped),
+    skipped: Math.max(0, skipped), brief,
   };
 }
 

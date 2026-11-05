@@ -113,3 +113,19 @@ test("a search with no AI Overview still compares against the ranked results; th
   assert.deepEqual(r.answerGaps, []);
   assert.ok(r.topicGaps.some((t) => /hire car/i.test(t.topic)));
 });
+
+test("the brief for Claude: the reel's prompt, the AI answer without citation markers, every page's content and mine", async () => {
+  const { gapBrief } = await import("../src/aio-gap.mjs");
+  const b = gapBrief({ keyword: "hire car", answer: "Cars are delivered.[[1]](https://a.example/)", questions: ["Who pays?"],
+    pages: [{ url: "https://a.example/", role: "AI Overview", title: "A", h2s: ["Who pays"], text: "word ".repeat(2000) }, { url: "https://b.example/", role: "#2", error: "HTTP 403" }],
+    mine: { url: "https://ss.example/car", title: "Mine", h2s: [], text: "my text" } });
+  assert.match(b, /^# Gap analysis brief: "hire car"/);
+  assert.match(b, /Missing information: facts, figures/);
+  assert.match(b, /Cars are delivered\.\n/);
+  assert.ok(!b.includes("[[1]]"));
+  assert.match(b, /## People also ask\n- Who pays\?/);
+  assert.match(b, /## Page 1 \(AI Overview\): https:\/\/a\.example\/\nTitle: A\nHeadings: Who pays/);
+  assert.match(b, /\[…\]/, "long page text is clipped");
+  assert.ok(!b.includes("b.example"), "pages that couldn't be read are left out");
+  assert.match(b, /## My page: https:\/\/ss\.example\/car\nTitle: Mine\n\nmy text$/);
+});

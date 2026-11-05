@@ -98,7 +98,7 @@ async function checkGoogle(prompt, loc, b, pid) {
   return { present: aio ? 1 : 0, mentioned: aio && b.mentions(aio.markdown) ? 1 : 0, cited: refs.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: null,
     organic_pos: own ? own.rank_group : null, local_pos: packIdx >= 0 ? packIdx + 1 : null,
     sources: refs.length ? refs : organic.slice(0, 10).map((i) => ({ domain: host(i.domain), url: i.url, title: i.title, organic: true })),
-    brands: pack.map((p) => p.title).slice(0, 10), excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null,
+    brands: pack.map((p) => p.title).slice(0, 10), excerpt: (aio?.markdown || "").slice(0, 8000), check_url: r.check_url || null,
     serp: serpSnapshot(items, (d) => b.isOwn(d)) };
 }
 
@@ -107,7 +107,7 @@ async function checkAiMode(prompt, loc, b, pid) {
   const aio = (r.items || []).find((i) => i.type === "ai_overview");
   const refs = (aio?.references || []).map((x) => ({ domain: host(x.domain || x.url), url: x.url, title: x.title }));
   return { present: aio ? 1 : 0, mentioned: aio && b.mentions(aio.markdown) ? 1 : 0, cited: refs.some((s) => b.isOwn(s.domain)) ? 1 : 0, rank: null,
-    sources: refs, brands: [], excerpt: (aio?.markdown || "").slice(0, 1500), check_url: r.check_url || null };
+    sources: refs, brands: [], excerpt: (aio?.markdown || "").slice(0, 8000), check_url: r.check_url || null };
 }
 /** Business names an answer lists: bold text that opens a bullet or a paragraph (numbered steps are skipped). */
 const LABEL = /^(phone|address|website|hours|email|note|tip|why|best for|services|location|contact|focus|details)$/i;
