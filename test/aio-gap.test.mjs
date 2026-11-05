@@ -129,3 +129,11 @@ test("the brief for Claude: the reel's prompt, the AI answer without citation ma
   assert.ok(!b.includes("b.example"), "pages that couldn't be read are left out");
   assert.match(b, /## My page: https:\/\/ss\.example\/car\nTitle: Mine\n\nmy text$/);
 });
+
+test("pasted pages still get the stored AI answer and People also ask for the same search", async () => {
+  const r = await aioGapReport({ id: 7 }, { mine: "https://ss.example/car", keyword: "Replacement car after an accident", sources: ["https://rival-b.example/vehicles"] }, { fetchPage: fake(PAGES) });
+  assert.match(r.from, /^pasted pages \+ AI answer from AI visibility run \d+ /);
+  assert.deepEqual(r.sources.map((x) => x.role), ["pasted"]);
+  assert.match(r.brief, /## Google's AI Overview answer\nNot at fault drivers get a like-for-like car/);
+  assert.match(r.brief, /## People also ask\n- Who pays for a hire car after an accident\?/);
+});

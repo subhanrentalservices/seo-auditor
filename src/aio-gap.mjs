@@ -159,6 +159,14 @@ export async function aioGapReport(project, { mine, keyword, sources, answer } =
     ({ cited, ranked, questions, aio } = s);
     if (!answer) answer = s.answer;
     from = `AI visibility run ${s.runId} (${String(s.date).slice(0, 10)})`;
+  } else if (!answer) {
+    // pasted pages (e.g. opened from a live search): still give Claude the stored AI answer and "People also ask"
+    // for the same search when there is one, so the brief isn't missing the answer (found 2026-11-05)
+    const s = storedOverview(project.id, keyword);
+    if (s && (s.answer || s.questions.length)) {
+      answer = s.answer; questions = s.questions; aio = s.aio;
+      from = `pasted pages + AI answer from AI visibility run ${s.runId} (${String(s.date).slice(0, 10)})`;
+    }
   }
   const ownHost = host(mine);
   const youCited = cited.some((u) => host(u) === ownHost);
