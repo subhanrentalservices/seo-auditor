@@ -44,3 +44,13 @@ test("descriptions under 170 characters are flagged when wider than the snippet 
   const short = "Contact Example Motors, 12 Sample Road, Springfield VIC 3000. Call 03 9000 0000 or send an enquiry.";
   assert.equal(issue(page("A normal page title for testing | Brand", short), "desc_length"), undefined);
 });
+
+// Owner reel 2026-11-05: pages titled "Best X: Reddit Recommendations" on the business's own site get repeated by
+// ChatGPT as "Reddit users recommend X". Flag them; real Reddit pages and plain mentions are left alone.
+test("borrowed_platform_title flags 'Reddit recommendations' pages that are not on Reddit", () => {
+  const p = (url, title, h1) => ({ ...page(title, "x".repeat(120)), url, final_url: url, h1 });
+  assert.ok(issue(p("https://xyz.com/best-crm-reddit", "Best CRM for Small Business - Reddit Recommendations", "Best CRM: Reddit Recommendations"), "borrowed_platform_title"));
+  assert.ok(issue(p("https://xyz.com/crm", "Top CRM picks", "What Reddit users recommend for CRM"), "borrowed_platform_title"));
+  assert.equal(issue(p("https://www.reddit.com/r/crm/best", "Best CRM? : r/crm", "Best CRM?"), "borrowed_platform_title"), undefined);
+  assert.equal(issue(p("https://xyz.com/social-media-guide", "How to use Reddit for support", "Using Reddit for support"), "borrowed_platform_title"), undefined);
+});

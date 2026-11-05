@@ -78,6 +78,7 @@ export const CHECKS = {
   low_word_count: ["notice", "Under 200 words (information: not a Google ranking issue)", "Google has no minimum word count and says word count isn't a ranking factor (John Mueller); short pages such as contact or booking pages can do their job well. Pages that add nothing useful still struggle, whatever their length.", "Check the page gives visitors what they came for. Add detail only where it helps them; don't pad."],
   low_text_ratio: ["notice", "Low text-to-HTML ratio, under 10% (information: not a Google metric)", "Google doesn't use a text-to-HTML ratio. Very heavy markup can slow a page, and little visible text can mean a thin page, so it's a hint to look, nothing more.", "Only if the page is slow or thin: remove unneeded markup or add useful content."],
   url_too_long: ["notice", "URL over 115 characters (information: not a Google ranking issue)", "Google doesn't rank by URL length. Google recommends simple, readable URLs; long ones are harder to read and share.", "Nothing to fix for ranking. For new pages, prefer short, readable URLs; don't change working URLs just for length."],
+  borrowed_platform_title: ["warning", "Page claims to be Reddit or Quora recommendations but isn't on that site", "The URL, title or H1 presents the page as Reddit or Quora user recommendations, yet it is published on this site. AI assistants often add \"reddit\" to their searches, so such pages get picked up and repeated as \"Reddit users recommend\", which attributes the site's own claims to real users. Google's spam policies cover inauthentic mentions and false information in Search and in AI responses.", "Remove the platform name unless the page genuinely summarises named, linked threads from that platform. Earn real, disclosed mentions on the forum itself instead."],
   dup_title_h1: ["notice", "Title and H1 identical (information: not a Google issue)", "Google doesn't penalise a title that matches the H1; both describing the page the same way is normal. Varying them is optional.", "Nothing to fix. Optionally use the H1 or the title for a second phrasing readers use."],
 
   // ---------------- Content age, structure and video ----------------
@@ -291,6 +292,8 @@ export function pageIssues(p, ctx) {
   if (!d.h1Count) add("missing_h1");
   else if (d.h1Count > 1) add("multiple_h1", `${d.h1Count} H1s`);
   if (p.title && p.h1 && p.title.trim().toLowerCase() === p.h1.trim().toLowerCase()) add("dup_title_h1");
+  const borrowed = borrowedPlatform(p);
+  if (borrowed) add("borrowed_platform_title", borrowed);
   if (p.words < 200 && p.indexable) add("low_word_count", `${p.words} words`);
   if (p.text_ratio < 10 && p.indexable && !(d.formShare >= 0.4)) add("low_text_ratio", `${p.text_ratio}%`);
   if (d.imgNoAlt) add("img_missing_alt", `${d.imgNoAlt} image(s)`);
@@ -381,4 +384,14 @@ function contentIssues(p, d, ctx, add) {
 export function healthScore(pageCount, pagesWithErrors, pagesWithWarningsOnly) {
   if (!pageCount) return 0;
   return Math.max(0, Math.round(100 * (1 - (pagesWithErrors + 0.5 * pagesWithWarningsOnly) / pageCount)));
+}
+
+/** "Best X: Reddit Recommendations" on a site that isn't Reddit/Quora (owner reel, 2026-11-05): returns the detail or "". */
+export function borrowedPlatform(p) {
+  const host = (() => { try { return new URL(p.final_url || p.url).hostname; } catch { return ""; } })();
+  if (!host || /(^|\.)(reddit|quora)\.com$/i.test(host)) return "";
+  const path = (() => { try { return decodeURIComponent(new URL(p.url).pathname).replace(/[-_/]+/g, " "); } catch { return ""; } })();
+  const claim = /\b(reddit|quora)\b.{0,40}\b(recommend\w*|reviews?|picks?|says?|users?|threads?|opinions?)\b|\b(recommend\w*|reviews?|best|top)\b.{0,60}\b(reddit|quora)\b/i;
+  const where = [["URL", path], ["title", p.title || ""], ["H1", p.h1 || ""]].filter(([, v]) => claim.test(v)).map(([k]) => k);
+  return where.length ? `"Reddit"/"Quora" recommendations claimed in the ${where.join(", ")} of a page on ${host}` : "";
 }
