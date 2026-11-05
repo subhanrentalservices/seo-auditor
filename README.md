@@ -82,7 +82,7 @@ Add a website under **All websites**, check its **Audit settings**, then press *
 | All checks | Every check the audit can raise, with severity, why, fix and Google source | Free |
 | Pages | Every URL with status, depth, links, words, issues, Search Console numbers and custom extraction columns; click one for a Google preview and all details | Free |
 | Link ideas | Internal link ideas, pages close to page 1, topic clusters (hub and spoke) | Free |
-| Competitors | Pages a competitor has that you don't (from their sitemap), and your page vs theirs for one search | Free |
+| Competitors | Pages a competitor has that you don't (from their sitemap), your page vs theirs for one search, and your page vs the Google AI Overview and every page it cites | Free |
 | Research | Keyword ideas from Google Autocomplete, search clusters from Search Console, topics up to 5 competitors cover that you don't; content briefs | Free; brief ≈ $0.002, volumes ≈ $0.01 + $0.0001 per idea |
 | Content inventory | Every indexable page with words, last modified, clicks and impressions trend, links in, decay and a suggested action (keep, refresh, merge, prune or noindex) | Free |
 | AI audit | AI crawler access in robots.txt and at the server, llms.txt, AI-search page issues, robots.txt tester | Free |

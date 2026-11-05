@@ -23,7 +23,7 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/audits/:auditId/export/issues.csv` | Issues CSV (also `pages.csv` with custom extraction columns, and `links.csv`). |
 | any | `/lv/…`, `/api/s/…`, `/s/…`, `/fonts/…` | Link building: passed to the link engine on 127.0.0.1:4561. |
 
-## Routes (127)
+## Routes (129)
 
 ### core (server.mjs, api.mjs)
 
@@ -274,6 +274,13 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | Method | Path | Parameters and notes |
 |---|---|---|
 | POST | `/api/projects/:projectId/page-compare` | body: `mine`, `theirs` (URLs), `keyword`. Fetches the two pages once and compares them. |
+
+### aio-gap.mjs
+
+| Method | Path | Parameters and notes |
+|---|---|---|
+| GET | `/api/projects/:projectId/aio-gap/searches` | Searches with a stored Google AI Overview (from AI visibility runs), newest first. |
+| POST | `/api/projects/:projectId/aio-gap` | body: `mine` (URL), `keyword`, optional `sources` (cited URLs) and `answer`. Without sources, uses the stored AI Overview for the search. Reads up to 8 cited pages once and lists what the answer and the cited pages cover that your page doesn't. |
 
 ### competitor-pages.mjs
 

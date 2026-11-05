@@ -111,6 +111,8 @@ export const NOTES = {
   "GET /api/branding": "App-wide report branding.",
   "PUT /api/branding": "body: `name`, `logo` (data URI), `primary`, `accent` (#rrggbb), `whiteLabel`.",
   [`POST /api/projects/${P}/page-compare`]: "body: `mine`, `theirs` (URLs), `keyword`. Fetches the two pages once and compares them.",
+  [`GET /api/projects/${P}/aio-gap/searches`]: "Searches with a stored Google AI Overview (from AI visibility runs), newest first.",
+  [`POST /api/projects/${P}/aio-gap`]: "body: `mine` (URL), `keyword`, optional `sources` (cited URLs) and `answer`. Without sources, uses the stored AI Overview for the search. Reads up to 8 cited pages once and lists what the answer and the cited pages cover that your page doesn't.",
   [`POST /api/projects/${P}/link-gap`]: "body: `domains` (2-5 competitor domains), optional `min` (1 or 2). Paid: one DataForSEO referring-domains call per competitor plus one for your site. Returns sites linking to 2+ competitors but not to you, labelled listing / site / spam.",
   [`POST /api/projects/${P}/competitor-pages`]: "body: `domains` (list). Pages in a competitor's sitemap that your site doesn't have.",
   [`GET /api/projects/${P}/keyword-ideas`]: "Stored keyword ideas (Google Autocomplete) and job status.",

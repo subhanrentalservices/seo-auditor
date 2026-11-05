@@ -48,6 +48,16 @@ export function signals(parsed, url, keyword) {
   };
 }
 
+// LocalBusiness and its schema.org subtypes (common ones). A page marked up as AutoRepair already is a LocalBusiness,
+// so "they mark up LocalBusiness, you don't" would be a false gap (found 2026-11-05 on an AutoRepair + AutoBodyShop page).
+const LOCAL_TYPES = new Set(("LocalBusiness AutomotiveBusiness AutoRepair AutoBodyShop AutoDealer AutoPartsStore AutoRental AutoWash GasStation " +
+  "MotorcycleDealer MotorcycleRepair Store ProfessionalService HomeAndConstructionBusiness Electrician GeneralContractor HVACBusiness " +
+  "HousePainter Locksmith MovingCompany Plumber RoofingContractor MedicalBusiness Dentist Physician Optician Pharmacy LegalService Attorney " +
+  "Notary FinancialService AccountingService BankOrCreditUnion InsuranceAgency FoodEstablishment Restaurant CafeOrCoffeeShop Bakery BarOrPub " +
+  "LodgingBusiness Hotel Motel HealthAndBeautyBusiness BeautySalon HairSalon DaySpa SportsActivityLocation ExerciseGym EntertainmentBusiness " +
+  "RealEstateAgent TravelAgency EmploymentAgency ChildCare DryCleaningOrLaundry EmergencyService SelfStorage ShoppingCenter").split(" "));
+export const isLocalBusiness = (t) => LOCAL_TYPES.has(t) || /Store$/.test(t);
+
 /** What the other page does for the search that yours doesn't, in priority order. Each item: [id, text]. */
 export function gaps(mine, theirs) {
   const out = [];
@@ -59,7 +69,8 @@ export function gaps(mine, theirs) {
   if (theirs.questionHeadings >= 3 && mine.questionHeadings < 3) out.push(["questions", `They answer ${theirs.questionHeadings} questions in headings (yours: ${mine.questionHeadings}). Add the questions your customers really ask, each with a short direct answer.`]);
   if (theirs.words >= mine.words * 1.3 && theirs.words - mine.words >= 200) out.push(["length", `Their page is longer (${theirs.words} words vs ${mine.words}). Length alone doesn't rank; check what they cover that you don't.`]);
   if (!has(mine.descriptionUses) && has(theirs.descriptionUses)) out.push(["description", "Their meta description uses the search's words; yours doesn't (it can make the snippet bold those words)."]);
-  const missingTypes = theirs.schemaTypes.filter((t) => !mine.schemaTypes.includes(t) && !/^(WebSite|WebPage|ImageObject|SiteNavigationElement|ListItem|Person|Organization|PostalAddress|GeoCoordinates|OpeningHoursSpecification|Offer|AggregateRating|Rating|Review|Answer|Question|EntryPoint|SearchAction|ReadAction)$/.test(t));
+  const local = mine.schemaTypes.some(isLocalBusiness);
+  const missingTypes = theirs.schemaTypes.filter((t) => !mine.schemaTypes.includes(t) && !(local && isLocalBusiness(t)) && !/^(WebSite|WebPage|ImageObject|SiteNavigationElement|ListItem|Person|Organization|PostalAddress|GeoCoordinates|OpeningHoursSpecification|Offer|AggregateRating|Rating|Review|Answer|Question|EntryPoint|SearchAction|ReadAction|PropertyValueSpecification)$/.test(t));
   if (missingTypes.length) out.push(["schema", `They mark up ${missingTypes.join(", ")}; you don't. Add markup only for content your page actually shows.`]);
   if (theirs.dated && !mine.dated) out.push(["dated", "They show when the page was published or updated; you don't. Show a real date."]);
   if (theirs.author && !mine.author) out.push(["author", "They name an author or reviewer; you don't. Name the real person responsible for the content."]);
