@@ -15,7 +15,8 @@ import { parseHtml } from "./crawler.mjs";
 import { words } from "./page2.mjs";
 import { signals, gaps as pageGaps } from "./page-compare.mjs";
 
-const MAX_SOURCES = 8;
+const MAX_SOURCES = 8;   // AI Overview cited pages read
+const MAX_RANKED = 5;    // top-ranked results read as well (owner, 2026-11-05: "open all pages showing for your keyword search")
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const host = (u) => { try { return new URL(u).host.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
 
@@ -57,9 +58,11 @@ export function covered(text, have) {
  * The gap report from already-read pages. mine / sources: { url, title, text, h2s, signals } (signals from page-compare);
  * answer: the AI Overview text. Pure: no fetching, so it can be tested directly.
  */
-export function aioGaps({ mine, sources, answer, keyword }) {
+export function aioGaps({ mine, sources, answer, keyword, questions = [] }) {
   const have = new Set(words(`${mine.title} ${mine.h1 || ""} ${(mine.h2s || []).join(" ")} ${mine.text}`));
   const answerGaps = answerSentences(answer).filter((s) => covered(s, have) < 0.5).slice(0, 12);
+  // Google's "People also ask" for the same search: questions whose words your page mostly doesn't use
+  const questionGaps = [...new Set(questions.map((q) => String(q).trim()).filter(Boolean))].filter((q) => covered(q, have) < 0.6).slice(0, 10);
   const topics = new Map();
   for (const s of sources) {
     for (const raw of s.h2s || []) {
@@ -85,24 +88,30 @@ export function aioGaps({ mine, sources, answer, keyword }) {
   }
   const need = Math.max(1, Math.ceil(sources.length / 2));
   const structure = [...counts.values()].filter((c) => c.pages >= need).sort((a, b) => b.pages - a.pages).map((c) => ({ ...c, of: sources.length }));
-  return { keyword, answerGaps, topicGaps, structure };
+  return { keyword, answerGaps, questionGaps, topicGaps, structure };
 }
 
-/** Latest stored Google AI Overview for this search (exact prompt, any case) from the AI visibility runs. */
+const SOCIAL = /(^|\.)(facebook|instagram|youtube|reddit|tiktok|x|twitter|linkedin|pinterest)\.com$/;
+/** Latest stored Google result for this search (exact prompt, any case) from the AI visibility runs: the AI Overview
+ *  (answer + cited pages) when one showed, the ranked results (organic, from the SERP snapshot) and "People also ask". */
 export function storedOverview(projectId, keyword) {
-  const r = get(`SELECT r.run_id, r.sources, r.excerpt, u.started_at FROM ai_results r JOIN ai_runs u ON u.id = r.run_id
-    WHERE u.project_id = ? AND r.platform = 'google' AND r.present = 1 AND lower(trim(r.prompt)) = lower(trim(?))
+  const r = get(`SELECT r.run_id, r.present, r.sources, r.excerpt, r.serp, u.started_at FROM ai_results r JOIN ai_runs u ON u.id = r.run_id
+    WHERE u.project_id = ? AND r.platform = 'google' AND r.error IS NULL AND lower(trim(r.prompt)) = lower(trim(?))
     ORDER BY r.run_id DESC LIMIT 1`, projectId, keyword);
   if (!r) return null;
-  let sources = [];
-  try { sources = JSON.parse(r.sources || "[]"); } catch { /* bad row */ }
-  return { runId: r.run_id, date: r.started_at, answer: r.excerpt || "", sources: sources.map((s) => s.url).filter(Boolean) };
+  const parse = (x, d) => { try { return JSON.parse(x || "") ?? d; } catch { return d; } };
+  const serp = parse(r.serp, {});
+  // without an AI Overview the stored "sources" are the organic results, so they are not citations
+  const cited = r.present ? parse(r.sources, []).map((x) => x.url).filter(Boolean) : [];
+  const ranked = (serp.top || []).filter((t) => t.url && t.type !== "business" && !/(^|\.)google\./.test(host(t.url)))
+    .map((t) => ({ url: t.url, pos: t.pos }));
+  return { runId: r.run_id, date: r.started_at, aio: Boolean(r.present), answer: r.present ? r.excerpt || "" : "", cited, ranked, questions: serp.paa || [] };
 }
 
-/** Searches with a stored AI Overview (for the form's list), newest run first. */
+/** Searches with a stored Google result (for the form's list), newest run first. */
 export function overviewSearches(projectId) {
   return all(`SELECT r.prompt, MAX(r.run_id) AS run_id FROM ai_results r JOIN ai_runs u ON u.id = r.run_id
-    WHERE u.project_id = ? AND r.platform = 'google' AND r.present = 1 GROUP BY lower(trim(r.prompt)) ORDER BY run_id DESC, r.prompt`, projectId)
+    WHERE u.project_id = ? AND r.platform = 'google' AND r.error IS NULL GROUP BY lower(trim(r.prompt)) ORDER BY run_id DESC, r.prompt`, projectId)
     .map((r) => r.prompt);
 }
 
@@ -111,20 +120,33 @@ export async function aioGapReport(project, { mine, keyword, sources, answer } =
   keyword = String(keyword || "").trim();
   if (!/^https?:\/\/[^\s/]+/i.test(mine)) fail(400, "Enter your page's full address (https://…)");
   if (!keyword) fail(400, "Enter the search");
-  let from = "pasted";
-  let urls = (Array.isArray(sources) ? sources : String(sources || "").split(/[\s,]+/)).map((u) => String(u).trim()).filter((u) => /^https?:\/\//i.test(u));
+  let from = "pasted", aio = null, questions = [];
+  const pasted = (Array.isArray(sources) ? sources : String(sources || "").split(/[\s,]+/)).map((u) => String(u).trim()).filter((u) => /^https?:\/\//i.test(u));
   answer = String(answer || "");
-  if (!urls.length) {
+  let cited = pasted, ranked = [];
+  if (!pasted.length) {
     const s = storedOverview(project.id, keyword);
-    if (!s) fail(400, "No Google AI Overview is stored for this search. Run AI visibility with “Google: AI Overview” for it, or paste the pages the AI Overview cites.");
-    urls = s.sources;
+    if (!s) fail(400, "No Google result is stored for this search. Run AI visibility with “Google: AI Overview + rankings” for it, or paste the pages to compare with.");
+    ({ cited, ranked, questions, aio } = s);
     if (!answer) answer = s.answer;
     from = `AI visibility run ${s.runId} (${String(s.date).slice(0, 10)})`;
   }
   const ownHost = host(mine);
-  const cited = [...new Set(urls)];
   const youCited = cited.some((u) => host(u) === ownHost);
-  const theirs = cited.filter((u) => host(u) !== ownHost && !/(^|\.)(facebook|instagram|youtube|reddit|tiktok|x|twitter)\.com$/.test(host(u))).slice(0, MAX_SOURCES);
+  const ownPos = ranked.find((t) => host(t.url) === ownHost)?.pos ?? null;
+  // pages to read: the AI Overview's cited pages (up to 8), then the top-ranked results not already cited (up to 5)
+  const role = new Map();
+  const add = (u, r) => {   // never your own page, social posts or Google's own pages (Maps, search viewer)
+    if (host(u) === ownHost || SOCIAL.test(host(u)) || /(^|\.)google\./.test(host(u))) return;
+    const k = u.replace(/#.*$/, ""); const have = role.get(k) || [];
+    if (!have.includes(r)) role.set(k, [...have, r]);
+  };
+  cited.forEach((u) => add(u, pasted.length ? "pasted" : "AI Overview"));
+  ranked.forEach((t) => add(t.url, `#${t.pos}`));
+  const order = [...role.keys()];
+  const theirs = [...order.filter((u) => role.get(u).some((r) => !r.startsWith("#"))).slice(0, MAX_SOURCES),
+    ...order.filter((u) => role.get(u).every((r) => r.startsWith("#"))).slice(0, MAX_RANKED)];
+  const skipped = new Set([...cited, ...ranked.map((t) => t.url)].map((u) => u.replace(/#.*$/, ""))).size - theirs.length - (youCited || ownPos ? 1 : 0);
   const read = async (u) => {
     const r = await fetchPage(u);
     if (r.status !== 200 || (!/html/i.test(r.type || "") && !/<html|<body/i.test(r.body || ""))) return { url: u, error: r.error || `HTTP ${r.status || "error"}` };
@@ -137,12 +159,12 @@ export async function aioGapReport(project, { mine, keyword, sources, answer } =
   const pages = [];
   for (const u of theirs) pages.push(await read(u));
   const ok = pages.filter((p) => !p.error);
-  const report = ok.length || answer ? aioGaps({ mine: me, sources: ok, answer, keyword }) : { keyword, answerGaps: [], topicGaps: [], structure: [] };
+  const report = aioGaps({ mine: me, sources: ok, answer, keyword, questions });
   return {
-    ...report, from, youCited, answer: answer.slice(0, 1500),
+    ...report, from, aio, youCited, ownPos, answer: answer.slice(0, 1500),
     mine: { url: me.url, title: me.title, words: me.words },
-    sources: pages.map((p) => p.error ? { url: p.url, error: p.error } : { url: p.url, title: p.title, words: p.words }),
-    skipped: cited.length - theirs.length - (youCited ? 1 : 0),
+    sources: pages.map((p, i) => ({ ...(p.error ? { url: p.url, error: p.error } : { url: p.url, title: p.title, words: p.words }), role: role.get(theirs[i]).join(" + ") })),
+    skipped: Math.max(0, skipped),
   };
 }
 

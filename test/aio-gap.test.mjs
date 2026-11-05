@@ -55,14 +55,22 @@ test("report: answer statements, headings shared by cited pages, and page-level 
 test("uses the stored Google AI Overview for the search when no pages are pasted", async () => {
   run("INSERT INTO projects (id, name, start_url) VALUES (7, 'SS', 'https://ss.example/')");
   const runId = Number(run("INSERT INTO ai_runs (project_id, status, platforms, prompts) VALUES (7, 'done', 'google', 1)").lastInsertRowid);
-  run("INSERT INTO ai_results (run_id, prompt, platform, present, sources, excerpt) VALUES (?, ?, 'google', 1, ?, ?)", runId, "Replacement car after an accident",
-    JSON.stringify([{ domain: "rival-a.example", url: "https://rival-a.example/hire" }]), "Not at fault drivers get a like-for-like car delivered to the workplace.");
+  const serp = { top: [{ pos: 1, url: "https://rival-b.example/vehicles", type: "article" }, { pos: 2, url: "https://google.com/goto?url=x", type: "business" },
+    { pos: 3, url: "https://ss.example/car", type: "service" }, { pos: 4, url: "https://rival-a.example/hire", type: "article" }],
+    paa: ["Who pays for a hire car after an accident?", "Can I get a replacement car while my car is repaired?"] };
+  run("INSERT INTO ai_results (run_id, prompt, platform, present, sources, excerpt, serp) VALUES (?, ?, 'google', 1, ?, ?, ?)", runId, "Replacement car after an accident",
+    JSON.stringify([{ domain: "rival-a.example", url: "https://rival-a.example/hire" }, { domain: "rival-a.example", url: "https://rival-a.example/hire" },
+      { domain: "google.com", url: "https://www.google.com/searchviewer/10?svid=x" }]), "Not at fault drivers get a like-for-like car delivered to the workplace.", JSON.stringify(serp));
   assert.deepEqual(overviewSearches(7), ["Replacement car after an accident"]);
   const r = await aioGapReport({ id: 7 }, { mine: "https://ss.example/car", keyword: "replacement car AFTER an accident " }, { fetchPage: fake(PAGES) });
   assert.match(r.from, new RegExp(`^AI visibility run ${runId} `));
-  assert.equal(r.sources.length, 1);
+  // the cited page and the top-ranked results are read; Google's own business links and your page are not
+  assert.deepEqual(r.sources.map((x) => [x.url, x.role]), [["https://rival-a.example/hire", "AI Overview + #4"], ["https://rival-b.example/vehicles", "#1"]]);
+  assert.equal(r.ownPos, 3);
+  assert.equal(r.aio, true);
   assert.equal(r.answerGaps.length, 1);
-  await assert.rejects(aioGapReport({ id: 7 }, { mine: "https://ss.example/car", keyword: "never searched" }, { fetchPage: fake(PAGES) }), /No Google AI Overview is stored/);
+  assert.deepEqual(r.questionGaps, ["Who pays for a hire car after an accident?"], "the question my page already answers is not a gap");
+  await assert.rejects(aioGapReport({ id: 7 }, { mine: "https://ss.example/car", keyword: "never searched" }, { fetchPage: fake(PAGES) }), /No Google result is stored/);
   await assert.rejects(aioGapReport({ id: 7 }, { mine: "ss.example/car", keyword: "x" }), /full address/);
 });
 
@@ -91,4 +99,17 @@ test("business rating lines and paragraph-length headings are not gaps", async (
   const { topicHeading } = await import("../src/aio-gap.mjs");
   assert.deepEqual(answerSentences("Style Body Repairs 5.0 (306)Car repair and maintenance service in Dandenong South for everyone."), []);
   assert.equal(topicHeading("If vehicle is drivable, come and see us for an on-the-spot estimate. Your claim can be processed there and then", "https://a.example/"), null);
+});
+
+test("a search with no AI Overview still compares against the ranked results; the organic list is not treated as citations", async () => {
+  const runId = Number(run("INSERT INTO ai_runs (project_id, status, platforms, prompts) VALUES (7, 'done', 'google', 1)").lastInsertRowid);
+  run("INSERT INTO ai_results (run_id, prompt, platform, present, sources, excerpt, serp) VALUES (?, 'hire car dandenong', 'google', 0, ?, '', ?)", runId,
+    JSON.stringify([{ domain: "rival-b.example", url: "https://rival-b.example/vehicles", organic: true }]),
+    JSON.stringify({ top: [{ pos: 2, url: "https://rival-b.example/vehicles", type: "article" }], paa: [] }));
+  const r = await aioGapReport({ id: 7 }, { mine: "https://ss.example/car", keyword: "hire car dandenong" }, { fetchPage: fake(PAGES) });
+  assert.equal(r.aio, false);
+  assert.equal(r.youCited, false);
+  assert.deepEqual(r.sources.map((x) => x.role), ["#2"]);
+  assert.deepEqual(r.answerGaps, []);
+  assert.ok(r.topicGaps.some((t) => /hire car/i.test(t.topic)));
 });

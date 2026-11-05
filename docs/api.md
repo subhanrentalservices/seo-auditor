@@ -279,8 +279,8 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 
 | Method | Path | Parameters and notes |
 |---|---|---|
-| GET | `/api/projects/:projectId/aio-gap/searches` | Searches with a stored Google AI Overview (from AI visibility runs), newest first. |
-| POST | `/api/projects/:projectId/aio-gap` | body: `mine` (URL), `keyword`, optional `sources` (cited URLs) and `answer`. Without sources, uses the stored AI Overview for the search. Reads up to 8 cited pages once and lists what the answer and the cited pages cover that your page doesn't. |
+| GET | `/api/projects/:projectId/aio-gap/searches` | Searches with a stored Google result (AI visibility runs), newest first. |
+| POST | `/api/projects/:projectId/aio-gap` | body: `mine` (URL), `keyword`, optional `sources` (cited URLs) and `answer`. Without sources, uses the stored Google result for the search (AI Overview + cited pages, top-ranked pages, People also ask). Reads up to 8 cited and 5 ranked pages once and lists what they cover that your page doesn't. |
 
 ### competitor-pages.mjs
 

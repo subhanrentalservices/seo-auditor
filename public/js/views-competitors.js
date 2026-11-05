@@ -115,7 +115,7 @@ function aioGapForm(ctx, searches) {
   const kw = field("The search (as in AI visibility)", "420px");
   kw.setAttribute("list", "aio-searches");
   const list = h("datalist", { id: "aio-searches" }, searches.map((s) => h("option", { value: s })));
-  const pasted = h("textarea", { rows: 2, placeholder: "Optional: the pages the AI Overview cites, one per line (else the stored AI Overview is used)", style: { width: "420px", maxWidth: "100%" } });
+  const pasted = h("textarea", { rows: 2, placeholder: "Optional: pages to compare with, one per line (else the stored Google result is used)", style: { width: "420px", maxWidth: "100%" } });
   const out = h("div", {});
   const go = async (e) => {
     e?.preventDefault();
@@ -124,24 +124,28 @@ function aioGapForm(ctx, searches) {
       const r = await api(`/api/projects/${ctx.project.id}/aio-gap`, { method: "POST", body: { mine: mine.value, keyword: kw.value, sources: pasted.value } });
       const link = (u) => h("a", { href: u, target: "_blank", rel: "noopener" }, shortUrl(u));
       mount(out,
-        h("p", { class: "small muted" }, `Source: ${r.from} · ${r.sources.length} cited page${r.sources.length === 1 ? "" : "s"} read`, r.skipped ? ` · ${r.skipped} social or duplicate skipped` : "",
-          r.youCited ? h("b", { class: "up" }, " · your site is already cited") : ""),
+        h("p", { class: "small muted" }, `Source: ${r.from}${r.aio === false ? " (no AI Overview showed: ranked results only)" : ""} · ${r.sources.length} page${r.sources.length === 1 ? "" : "s"} read`,
+          r.skipped ? ` · ${r.skipped} social, Google or extra skipped` : "", r.ownPos ? ` · your site ranks #${r.ownPos}` : "",
+          r.youCited ? h("b", { class: "up" }, " · your site is already cited in the AI Overview") : ""),
+        h("p", { class: "small" }, "Read: ", ...r.sources.flatMap((x, i) => [i ? " · " : "", link(x.url), h("span", { class: "muted" }, ` (${x.role})`)])),
         r.sources.some((s) => s.error) ? h("p", { class: "small", style: { color: "var(--warn-ink)" } }, r.sources.filter((s) => s.error).map((s) => `${s.url}: ${s.error}`).join(" · ")) : null,
         h("h3", { style: { margin: "12px 0 6px" } }, `What the AI answer says that your page doesn't (${r.answerGaps.length})`),
         r.answerGaps.length ? h("ol", { class: "small" }, r.answerGaps.map((s) => h("li", { style: { margin: "4px 0" } }, s))) : h("p", { class: "small" }, "Your page covers every statement in the stored answer."),
-        h("h3", { style: { margin: "12px 0 6px" } }, `Sections the cited pages have that yours doesn't (${r.topicGaps.length})`),
+        h("h3", { style: { margin: "12px 0 6px" } }, `“People also ask” questions your page doesn't answer (${(r.questionGaps || []).length})`),
+        (r.questionGaps || []).length ? h("ol", { class: "small" }, r.questionGaps.map((q) => h("li", { style: { margin: "4px 0" } }, q))) : h("p", { class: "small" }, "None, or Google showed no “People also ask” box."),
+        h("h3", { style: { margin: "12px 0 6px" } }, `Sections the other pages have that yours doesn't (${r.topicGaps.length})`),
         r.topicGaps.length ? table([{ label: "Their section", get: (x) => h("b", {}, x.topic) }, { label: "Pages", num: true, get: (x) => num(x.pages.length) },
           { label: "Where", get: (x) => h("span", { class: "small" }, ...x.pages.flatMap((u, i) => [i ? " · " : "", link(u)])) }], r.topicGaps) : h("p", { class: "small" }, "No missing sections."),
-        h("h3", { style: { margin: "12px 0 6px" } }, `What most cited pages do that yours doesn't (${r.structure.length})`),
+        h("h3", { style: { margin: "12px 0 6px" } }, `What most of these pages do that yours doesn't (${r.structure.length})`),
         r.structure.length ? h("ol", { class: "small" }, r.structure.map((s) => h("li", { style: { margin: "4px 0" } }, `${s.text} (${s.pages} of ${s.of})`))) : h("p", { class: "small" }, "Nothing most of them share."),
         h("p", { class: "small muted" }, "A checklist, not a template: add only what is true for your business, in your own words, and never copy their text. Google: no special optimisation is needed for AI features; pages must be indexed and eligible for a snippet."));
     } catch (err) { toast(err.message); }
     finally { btn.disabled = false; btn.textContent = "Find AI Overview gaps"; }
   };
   const btn = h("button", { class: "btn" }, "Find AI Overview gaps");
-  return h("form", { class: "card", onsubmit: go }, h("h2", {}, "Your page vs the AI Overview and the pages it cites"),
-    h("p", { class: "hint" }, "Takes the Google AI Overview stored by your last AI visibility run for the search (answer + cited pages), reads each cited page once (up to 8) and your page, ",
-      "and lists what the answer and the cited pages cover that your page doesn't."),
+  return h("form", { class: "card", onsubmit: go }, h("h2", {}, "Your page vs the AI Overview, the pages it cites and the top results"),
+    h("p", { class: "hint" }, "Takes the Google result stored by your last AI visibility run for the search: the AI Overview (answer + cited pages), the top-ranked pages and “People also ask”. ",
+      "Reads each page once (up to 8 cited + 5 ranked) and your page, and lists what they cover that yours doesn't. No new paid call."),
     list, h("div", { class: "stack", style: { gap: "6px" } }, mine, kw, pasted, h("div", { class: "row" }, btn)), out);
 }
 
