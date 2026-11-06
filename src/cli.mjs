@@ -88,8 +88,18 @@ if (cmd === "add") {
   const { scheduledRun } = await import("./scheduled-run.mjs");
   await scheduledRun();
   process.exit();
+} else if (cmd === "offpage") {
+  // Off-page audit from a Search Console Links export (Links → External links → Export). Usage: offpage <csv> [--site host]
+  const { readFileSync } = await import("node:fs");
+  const { parseGscLinks, offpageAudit } = await import("./gsc-links.mjs");
+  const i = process.argv.indexOf("--site");
+  const r = offpageAudit(parseGscLinks(readFileSync(a1, "utf8")), { site: i > 0 ? process.argv[i + 1] : "" });
+  console.log(`linking sites ${r.total}: editorial ${r.editorial}, listings ${r.listing}, likely spam ${r.spam}`);
+  console.log(r.verdict);
+  for (const f of r.flagged) console.log(`  spam? ${f.site} (${f.linkingPages} pages): ${f.reasons.join("; ")}`);
+  for (const x of r.sites.filter((x) => x.type !== "spam")) console.log(`  ${x.type.padEnd(9)} ${x.site} (${x.linkingPages})`);
 } else if (cmd === "install") {
   const { installDesktopShortcut, setAutostart } = await import("./desktop.mjs");
   console.log("desktop shortcut:", await installDesktopShortcut());
   if (process.argv.includes("--autostart")) console.log("start with Windows:", await setAutostart(true));
-} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");
+} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | offpage <gsc-links.csv> [--site host] | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");
