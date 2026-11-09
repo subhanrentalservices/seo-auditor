@@ -88,6 +88,15 @@ if (cmd === "add") {
   const { scheduledRun } = await import("./scheduled-run.mjs");
   await scheduledRun();
   process.exit();
+} else if (cmd === "templated") {
+  // Headings stamped across most pages of a section (e.g. a "Key Takeaways" box on every blog post). Usage: templated <projectId> [--share 0.4]
+  const a = get("SELECT id FROM audits WHERE project_id=? AND status='done' ORDER BY id DESC LIMIT 1", Number(a1));
+  if (!a) throw new Error("no finished audit for that project");
+  const { templatedForAudit } = await import("./quality.mjs");
+  const i = process.argv.indexOf("--share");
+  const rows = templatedForAudit(a.id, { share: i > 0 ? Number(process.argv[i + 1]) : 0.4 });
+  console.log(rows.length ? `audit ${a.id}: ${rows.length} heading(s) repeated across most pages of a section. Vary structure by intent; keep a shared block only where it helps the reader.` : `audit ${a.id}: no templated headings found.`);
+  for (const r of rows.slice(0, 40)) console.log(`  ${r.section.padEnd(10)} ${Math.round(r.share * 100)}% (${r.pages}/${r.of})  ${r.heading}`);
 } else if (cmd === "offpage") {
   // Off-page audit from a Search Console Links export (Links → External links → Export). Usage: offpage <csv> [--site host]
   const { readFileSync } = await import("node:fs");
@@ -102,4 +111,4 @@ if (cmd === "add") {
   const { installDesktopShortcut, setAutostart } = await import("./desktop.mjs");
   console.log("desktop shortcut:", await installDesktopShortcut());
   if (process.argv.includes("--autostart")) console.log("start with Windows:", await setAutostart(true));
-} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | offpage <gsc-links.csv> [--site host] | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");
+} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | offpage <gsc-links.csv> [--site host] | templated <projectId> [--share 0.4] | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");

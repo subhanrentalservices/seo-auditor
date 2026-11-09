@@ -316,7 +316,9 @@ export function parseHtml(html, url) {
     if (!best || score > best.score) best = { score, text: p.slice(0, 1400), words: n, pos: Math.round(pos * 100) };
   }
   if (best) d.bestPassage = { text: best.text, words: best.words, pos: best.pos, score: Math.round(best.score * 100) };
-  d.h2s = headings.slice(0, 30).map((x) => x.slice(0, 120));
+  // Content headings only (2026-11-09): menu and footer headings ("Site", "Services") made every page look templated
+  // and leaked into competitor/AI-gap heading comparisons. Headings inside links (related-post cards) are left out too.
+  d.h2s = hs.filter((h) => (h.name === "h2" || h.name === "h3") && !$(h).closest("a").length).map((h) => $(h).text().trim()).filter(Boolean).slice(0, 30).map((x) => x.slice(0, 120));
   // Structured data must describe visible content (Google SD policies): FAQ questions on the page, a visible trail
   // for BreadcrumbList, and no self-serving rating markup on the business's own entity.
   const norm = (x) => x.toLowerCase().replace(/\s+/g, " ").replace(/[^a-z0-9 ]/g, "").trim();

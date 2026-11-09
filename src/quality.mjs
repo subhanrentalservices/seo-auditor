@@ -50,6 +50,42 @@ export function similarPairs(pages, { min = 0.2, limit = 200 } = {}) {
   return out.sort((x, y) => y.score - x.score).slice(0, limit);
 }
 
+/**
+ * Templated content (owner report 2026-11-09: a blog "reads as AI content" because every post shares one template:
+ * the same "Key Takeaways" box, definition paragraph and heading set). Google's spam policies call out scaled content
+ * that adds little value; a heading repeated across most pages of a section is a cheap signal of a stamped template.
+ * pages: [{ url, h2s: [...] }]. Groups pages by first path segment ("/blog/x" -> "/blog/"; top-level pages -> "/"),
+ * and returns headings found on >= share of a group's pages (groups with >= minPages), most widespread first.
+ */
+export function templatedHeadings(pages, { share = 0.4, minPages = 10, ignore = [] } = {}) {
+  const norm = (h) => String(h).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  const skip = new Set(ignore.map(norm));
+  const groups = new Map();
+  for (const p of pages) {
+    let path = "/";
+    try { const seg = new URL(p.url).pathname.split("/").filter(Boolean); path = seg.length > 1 ? `/${seg[0]}/` : "/"; } catch {}
+    const g = groups.get(path) || { n: 0, count: new Map(), label: new Map() };
+    g.n++;
+    for (const h of new Set((p.h2s || []).map(norm).filter(Boolean))) {
+      if (skip.has(h)) continue;
+      g.count.set(h, (g.count.get(h) || 0) + 1);
+      if (!g.label.has(h)) g.label.set(h, (p.h2s || []).find((x) => norm(x) === h));
+    }
+    groups.set(path, g);
+  }
+  const out = [];
+  for (const [section, g] of groups) {
+    if (g.n < minPages) continue;
+    for (const [h, c] of g.count) if (c / g.n >= share) out.push({ section, heading: g.label.get(h), pages: c, of: g.n, share: +(c / g.n).toFixed(2) });
+  }
+  return out.sort((a, b) => b.share - a.share || b.pages - a.pages);
+}
+
+export function templatedForAudit(auditId, opts) {
+  const rows = all("SELECT url, data FROM pages WHERE audit_id=? AND indexable=1", auditId);
+  return templatedHeadings(rows.map((r) => { let d = {}; try { d = JSON.parse(r.data || "{}"); } catch {} return { url: r.url, h2s: d.h2s || [] }; }), opts);
+}
+
 export function similarForAudit(auditId, opts) {
   return similarPairs(all("SELECT url, text FROM page_text WHERE audit_id=?", auditId), opts);
 }
