@@ -42,18 +42,18 @@ SmartScreen shows "More info → Run anyway"; on macOS right-click → Open the 
 ## Checks
 
 <!-- generated:numbers (node scripts/readme-numbers.mjs) -->
-**193 checks**: 32 errors, 60 warnings, 101 notices.
+**194 checks**: 32 errors, 60 warnings, 102 notices.
 
 | Group | Checks |
 |---|---|
-| SEO (on-page, content, links, structured data, sitemaps, hreflang…) | 91 |
+| SEO (on-page, content, links, structured data, sitemaps, hreflang…) | 92 |
 | Crawlability (status codes, redirects, robots.txt, canonicals, rendering…) | 74 |
 | AI search (AI crawlers, answer-ready content; scored as AI Readiness) | 15 |
 | Core Web Vitals (field data first, Lighthouse as fallback) | 6 |
 | Security headers (information, not a Google ranking factor) | 4 |
 | Accessibility (information, not a Google ranking factor) | 3 |
 
-132 checks link to the Google Search Central page on their topic; the rest are labelled in the app as tool heuristics, security or accessibility information.
+133 checks link to the Google Search Central page on their topic; the rest are labelled in the app as tool heuristics, security or accessibility information.
 
 AI visibility costs about $0.024 per prompt with all 5 platforms (ChatGPT (web search) $0.004, Google: AI Overview + rankings $0.006, Google AI Mode $0.004, Perplexity (Sonar, web search) $0.006, Gemini $0.004). The default monthly DataForSEO budget is $2.00.
 <!-- /generated:numbers -->

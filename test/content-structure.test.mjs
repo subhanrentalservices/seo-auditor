@@ -8,7 +8,7 @@ import path from "node:path";
 
 process.env.SEO_AUDITOR_DATA = mkdtempSync(path.join(tmpdir(), "seo-auditor-test-")); // keep the real database untouched
 const { parseHtml, isoDate } = await import("../src/crawler.mjs");
-const { pageIssues, pastYear, CHECKS } = await import("../src/checks.mjs");
+const { pageIssues, pastYear, yearNamed, CHECKS } = await import("../src/checks.mjs");
 
 const S = "https://acme.example";
 const ctx = { auditDate: "2026-10-26" };
@@ -24,7 +24,7 @@ const doc = (head, body) => `<html lang="en"><head><title>A page title for the t
 const ld = (o) => `<script type="application/ld+json">${JSON.stringify(o)}</script>`;
 
 test("every new check is in the catalogue", () => {
-  for (const id of ["content_stale", "title_past_year", "heading_skip", "heading_before_h1", "long_no_toc", "long_paragraphs", "video_no_schema", "video_schema_incomplete"])
+  for (const id of ["content_stale", "title_past_year", "title_year_ending", "heading_skip", "heading_before_h1", "long_no_toc", "long_paragraphs", "video_no_schema", "video_schema_incomplete"])
     assert.ok(CHECKS[id] && CHECKS[id].length === 4, id);
 });
 
@@ -136,4 +136,19 @@ test("a VideoObject without uploadDate is flagged; a complete one is clean", () 
 test("noindex pages get none of these notices", () => {
   const r = audit(doc(ld({ "@type": "Article", dateModified: "2020-01-01" }), `<main><h2>x</h2><h1>Best of 2020</h1><h4>y</h4>${yt}</main>`), undefined, { indexable: 0 });
   assert.deepEqual(r.ids.filter((id) => /content_stale|title_past_year|heading_|video_/.test(id)), []);
+});
+
+test("in November and December a title naming this year is flagged for the new-year refresh; earlier in the year it is not", () => {
+  assert.equal(yearNamed("Discord File Size Limit 2026: Send Big Images", 2026), true);
+  assert.equal(yearNamed("Tax rates 2026/27", 2026), false);
+  assert.equal(yearNamed("Laptops under $2026", 2026), false);
+  assert.equal(yearNamed("Events in 2026", 2026), false);
+  const html = doc("", "<main><h1>Choosing brakes</h1></main>").replace("A page title for the tests here", "Best brakes 2026");
+  const run = (auditDate) => { const p = parseHtml(html, S + "/guides/brakes");
+    const page = { url: S + "/guides/brakes", final_url: S + "/guides/brakes", status: 200, content_type: "text/html", indexable: 1, title: p.title, description: p.description, h1: p.h1, words: p.words, text_ratio: 20, canonical: S + "/guides/brakes", data: p.data };
+    return pageIssues(page, { auditDate }).map(([id]) => id); };
+  assert.ok(run("2026-11-10").includes("title_year_ending"));
+  assert.ok(!run("2026-10-26").includes("title_year_ending"));
+  assert.ok(!run("2026-11-10").includes("title_past_year"));
+  assert.ok(run("2027-01-05").includes("title_past_year"));
 });

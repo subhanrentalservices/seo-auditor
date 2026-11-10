@@ -83,6 +83,7 @@ export const CHECKS = {
 
   // ---------------- Content age, structure and video ----------------
   content_stale: ["notice", "Article not updated in over 12 months", "The newest date this article states is more than a year before the audit. Facts, prices, laws and screenshots go out of date, and readers and AI answers prefer current information. Age alone is not a ranking penalty.", "Review the article: correct what changed, add what's new, then update the visible date and dateModified. Don't change the date without changing the content."],
+  title_year_ending: ["notice", "Title or H1 names this year, and the year ends soon", "In November and December a headline with this year (\"… 2026\") is weeks from looking out of date, and searchers start asking for next year's version.", "Before 1 January, re-check the facts on the page, then change the year in the title, H1 and text together and update the modified date. Don't change only the number: Google says not to fake freshness."],
   title_past_year: ["notice", "Title or H1 mentions a past year", "A past year in the headline (\"… 2024\") makes the page look out of date in search results and lowers clicks.", "If the content is current, update the year or remove it; if the page is about that year on purpose (history, a past event), ignore this notice."],
   heading_skip: ["notice", "Heading levels skipped", "Headings are the page's outline for screen readers and crawlers; jumping from H2 to H4 leaves a gap in it.", "Use the next level down for sub-sections (H2 → H3 → H4). Change the styling with CSS, not the heading level."],
   heading_before_h1: ["notice", "Headings before the H1", "The H1 should open the page's content; headings above it make the outline start with something else.", "Move the H1 above the other content headings, or turn the earlier ones into plain text if they are labels."],
@@ -237,6 +238,20 @@ export function pastYear(text, currentYear) {
   return null;
 }
 
+/** True when a title or H1 names `year` as the page's year: not a price, quantity, model code, a range into the next
+ *  year ("2026/27", "2026–2027") or a headline about history/events (the same exclusions as pastYear). */
+export function yearNamed(text, year) {
+  if (!text || ON_PURPOSE.test(text)) return false;
+  for (const m of text.matchAll(/\b(20\d{2})\b/g)) {
+    if (+m[1] !== year) continue;
+    const before = text.slice(0, m.index), after = text.slice(m.index + 4);
+    if (/[$€£¥#]\s*$|[\d.,]$|[a-z]-$/i.test(before) || UNIT_AFTER.test(after) || /^[.,]\d/.test(after)) continue;
+    if (/^\s*[-–—/]\s*(\d{4}|\d{2})\b/.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
 /** Rules that need only the page itself. Returns [[checkId, detail], ...]. */
 export function pageIssues(p, ctx) {
   const out = [];
@@ -369,6 +384,10 @@ function contentIssues(p, d, ctx, add) {
     const year = +today.slice(0, 4);
     const t = pastYear(p.title, year), h = t ? null : pastYear(p.h1, year);
     if (t || h) add("title_past_year", t ? `title mentions ${t}: "${p.title.slice(0, 80)}"` : `H1 mentions ${h}: "${p.h1.slice(0, 80)}"`);
+    if (+today.slice(5, 7) >= 11 && !t && !h) {
+      const where = yearNamed(p.title, year) ? "title" : yearNamed(p.h1, year) ? "H1" : null;
+      if (where) add("title_year_ending", `${where} names ${year}: "${(where === "title" ? p.title : p.h1).slice(0, 80)}"; plan the ${year + 1} refresh`);
+    }
   }
   if (d.headingSkips) add("heading_skip", `${d.headingSkips} skip(s), e.g. ${d.headingSkipExample}`);
   if (d.headingsBeforeH1) add("heading_before_h1", `${d.headingsBeforeH1} heading(s) before the H1`);
