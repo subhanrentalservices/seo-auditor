@@ -107,6 +107,23 @@ if (cmd === "add") {
   console.log(r.verdict);
   for (const f of r.flagged) console.log(`  spam? ${f.site} (${f.linkingPages} pages): ${f.reasons.join("; ")}`);
   for (const x of r.sites.filter((x) => x.type !== "spam")) console.log(`  ${x.type.padEnd(9)} ${x.site} (${x.linkingPages})`);
+} else if (cmd === "ai-check") {
+  // ai-check <file.html|file.md|file.txt|url|-> [...]: AI-wording check before anything is published or sent.
+  // "-" reads stdin. Exit code 1 when any input fails (phrase tells, or an ai-style score under 85 on 300+ words).
+  const { readFileSync } = await import("node:fs");
+  const { aiCheck } = await import("./ai-check.mjs");
+  let failed = 0;
+  for (const src of process.argv.slice(3)) {
+    const isUrl = /^https?:\/\//i.test(src);
+    const body = src === "-" ? readFileSync(0, "utf8") : isUrl ? await (await fetch(src, { headers: { "user-agent": "Mozilla/5.0 seo-auditor ai-check" } })).text() : readFileSync(src, "utf8");
+    const kind = isUrl || /\.html?$/i.test(src) || /^\s*<(!doctype|html|section|main|div|p)\b/i.test(body) ? "html" : "text";
+    const r = aiCheck(body, kind);
+    if (!r.pass) failed++;
+    console.log(`${r.pass ? "PASS" : "FAIL"}  ${src}${r.style ? `  (style ${r.style.score})` : "  (under " + r.minWords + " words: phrase check only)"}`);
+    for (const h of r.hits) console.log(`   line ${h.line}: ${h.tell}: "${h.match}"`);
+    for (const p of r.style?.problems || []) console.log(`   style: ${p}`);
+  }
+  process.exitCode = failed ? 1 : 0;
 } else if (cmd === "keyword-fit") {
   // keyword-fit <projectId> "<keyword>" [--url <page>] [--serp <results.json>] [--allintitle N] [--limit 50|300]
   // Where the page uses the keyword (latest audit) and, with a saved SERP file, the "untapped keyword" test.
