@@ -2,7 +2,7 @@
 // that helpful content is fine however it's made. These are the habits of unedited AI drafts that readers notice:
 // every sentence the same length, few short sentences, one word opening many sentences, "Label: text" bullet lists,
 // three-item lists everywhere, stock phrases and the same phrasing said again. A careful human editor removes them.
-// Calibrated on picturetolink.com: 26 AI-drafted posts averaged 75.6, the same posts after a surface rewrite 75.8,
+// Calibrated on one site's blog: 26 AI-drafted posts averaged 75.6, the same posts after a surface rewrite 75.8,
 // and the same posts rewritten by an editor to this standard 99-100. The page check flags scores under 85.
 
 const STOCK = [
