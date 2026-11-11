@@ -33,7 +33,13 @@ export function aiStyle({ paragraphs = [], items = [], labelItems = 0, headings 
   const lens = sentences.map((s) => s.split(/\s+/).length);
   const per1k = (n) => (n * 1000) / words;
   const openers = new Map();
-  for (const s of sentences) { const w = s.split(/\s+/)[0].toLowerCase().replace(/[^a-z']/g, ""); openers.set(w, (openers.get(w) || 0) + 1); }
+  // Opener = first real word. A short label before a colon ("Asked on Reddit: …", "Our answer: …") and list numbers
+  // ("01", "2.") are layout, not the writer's habit, so they are skipped; a sentence with no word left isn't counted.
+  for (const s of sentences) {
+    const body = s.replace(/^(?:[^\s:]+(?:\s+[^\s:]+){0,3}):\s+/, "").replace(/^(?:\d+[.)]?\s+)+/, "");
+    const w = (body.split(/\s+/)[0] || "").toLowerCase().replace(/[^a-z']/g, "");
+    if (w) openers.set(w, (openers.get(w) || 0) + 1);
+  }
   const [topOpener = "", topCount = 0] = [...openers.entries()].sort((a, b) => b[1] - a[1])[0] || [];
   const paraSent = paragraphs.map((p) => p.split(/(?<=[.?!])\s+/).length);
   // Only real three-item lists of short items ("speed, privacy and cost"), not any clause with a comma and an "and".

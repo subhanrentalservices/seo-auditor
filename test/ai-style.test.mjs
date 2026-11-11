@@ -93,3 +93,16 @@ test("typographic apostrophes count as limits and advice", () => {
   const r = aiStyle({ paragraphs: [p] });
   assert.ok(r.depth.signals.limitsPer1k > 0, `limits ${r.depth.signals.limitsPer1k}`);
 });
+
+test("labels before a colon and list numbers are not counted as sentence openers", () => {
+  const filler = "Short ones help. Long sentences that wander across a few clauses and keep going for a while still read fine when they sit beside short ones. ";
+  const paragraphs = Array.from({ length: 11 }, (_, i) => `Asked on Reddit: a driver wanted to know about case ${i + 1} and what happens next. ${filler}`);
+  const r = aiStyle({ paragraphs, items: [], labelItems: 0, headings: [] });
+  assert.notEqual(r.signals.topOpener, "asked");
+  const nums = aiStyle({ paragraphs: Array.from({ length: 12 }, (_, i) => `0${i + 1} Mechanical work covers servicing and repairs for most makes. ${filler}`), items: [], labelItems: 0, headings: [] });
+  assert.notEqual(nums.signals.topOpener, "");
+  assert.ok(!nums.problems.some((p) => p.startsWith('"" starts')));
+  // A real repeated opener still counts.
+  const real = aiStyle({ paragraphs: Array.from({ length: 8 }, () => `The car needs a service. The parts are ordered. The job takes a day. ${filler}`), items: [], labelItems: 0, headings: [] });
+  assert.equal(real.signals.topOpener, "the");
+});
