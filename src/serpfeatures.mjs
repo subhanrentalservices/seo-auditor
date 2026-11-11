@@ -21,7 +21,9 @@ export const DIRECTORY_SITES = ["yelp", "yellowpages", "yell", "whitepages", "tr
   "oneflare", "airtasker", "serviceseeking", "productreview", "trustpilot", "bbb", "angi", "angieslist", "thumbtack", "houzz", "tripadvisor",
   "foursquare", "mapquest", "facebook", "instagram", "linkedin", "tiktok", "pinterest", "x", "twitter", "amazon", "ebay", "etsy", "walmart",
   "gumtree", "craigslist", "carsales", "g2", "capterra", "getapp", "softwareadvice", "reddit", "quora", "youtube", "wikipedia", "indeed",
-  "glassdoor", "seek", "booking", "expedia", "airbnb", "zomato", "doordash", "ubereats", "menulog"];
+  "glassdoor", "seek", "booking", "expedia", "airbnb", "zomato", "doordash", "ubereats", "menulog",
+  // Australian directories and marketplaces seen in local SERPs (2026-11-11)
+  "autoguru", "whereis", "calso", "cylex", "aussieweb", "brownbook", "yably", "bark", "wordofmouth", "finda"];
 const ARTICLE_PATH = /\/(blog|news|articles?|guides?|how-to|resources|learn|insights|posts?|tips|advice|knowledge|faq|questions)\/|\/20\d\d\/\d\d?\//i;
 const ARTICLE_TITLE = /^(how|what|why|when|where|which|who|can|should|is|are|do|does)\b|\b(guide|how to|tips|explained|checklist|ways to|things to|reasons|vs\.?|versus|review|reviews|best|top \d+|\d+ best)\b/i;
 

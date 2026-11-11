@@ -83,6 +83,8 @@ export const CHECKS = {
 
   // ---------------- Content age, structure and video ----------------
   content_stale: ["notice", "Article not updated in over 12 months", "The newest date this article states is more than a year before the audit. Facts, prices, laws and screenshots go out of date, and readers and AI answers prefer current information. Age alone is not a ranking penalty.", "Review the article: correct what changed, add what's new, then update the visible date and dateModified. Don't change the date without changing the content."],
+  ai_style: ["notice", "Writing shows signs of an unedited AI draft", "Readers notice machine habits (sentences all one length, \"Label: text\" bullet lists, the same phrase repeated, stock phrases) and trust the page less. Google rewards helpful, people-first writing however it is produced; these are the marks of a draft nobody edited.", "Edit like a person who knows the subject: mix short and long sentences, write label lists as prose, say each thing once. The details list what to fix on this page."],
+  thin_thinking: ["notice", "Text describes but doesn't advise or explain", "Pages that only list facts lose to pages that tell the reader what to do, why it works and where it stops working. Few reasons, few real numbers and no stated limits are signs the page was written to fill a topic, not to help.", "Add a clear recommendation (\"if X, do Y\"), the reason behind it, a worked example with real numbers, and the limits or trade-offs. Heuristic signals: read the page before changing it."],
   title_year_ending: ["notice", "Title or H1 names this year, and the year ends soon", "In November and December a headline with this year (\"… 2026\") is weeks from looking out of date, and searchers start asking for next year's version.", "Before 1 January, re-check the facts on the page, then change the year in the title, H1 and text together and update the modified date. Don't change only the number: Google says not to fake freshness."],
   title_past_year: ["notice", "Title or H1 mentions a past year", "A past year in the headline (\"… 2024\") makes the page look out of date in search results and lowers clicks.", "If the content is current, update the year or remove it; if the page is about that year on purpose (history, a past event), ignore this notice."],
   heading_skip: ["notice", "Heading levels skipped", "Headings are the page's outline for screen readers and crawlers; jumping from H2 to H4 leaves a gap in it.", "Use the next level down for sub-sections (H2 → H3 → H4). Change the styling with CSS, not the heading level."],
@@ -389,6 +391,9 @@ function contentIssues(p, d, ctx, add) {
       if (where) add("title_year_ending", `${where} names ${year}: "${(where === "title" ? p.title : p.h1).slice(0, 80)}"; plan the ${year + 1} refresh`);
     }
   }
+  // Listing pages (blog index, categories) are cards and summaries, not writing to edit.
+  if (d.aiStyle && d.aiStyle.score < 85 && !listing) add("ai_style", `AI-style score ${d.aiStyle.score} of 100: ${d.aiStyle.problems.join("; ")}`);
+  if (d.aiStyle && d.aiStyle.depth < 75 && isArticle(p) && !listing) add("thin_thinking", `depth ${d.aiStyle.depth} of 100: ${(d.aiStyle.depthProblems || []).join("; ")}`);
   if (d.headingSkips) add("heading_skip", `${d.headingSkips} skip(s), e.g. ${d.headingSkipExample}`);
   if (d.headingsBeforeH1) add("heading_before_h1", `${d.headingsBeforeH1} heading(s) before the H1`);
   if (p.words >= 1500 && d.h2Count >= 4 && !(d.jumpLinks >= 2)) add("long_no_toc", `${p.words} words, ${d.h2Count} H2s, ${d.jumpLinks || 0} jump link(s) to headings`);

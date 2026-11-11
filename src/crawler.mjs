@@ -20,6 +20,7 @@ import { siteProbeIssues } from "./site-probes.mjs";
 import { robotsTxtIssues } from "./robots-txt.mjs";
 import { siteRuleIssues, saveLastmods, lastmodAccuracyIssues } from "./site-rules.mjs";
 import { pageSignals, signalSiteIssues } from "./page-signals.mjs";
+import { aiStyleFromDom } from "./ai-style.mjs";
 import { answerLayout } from "./answer-layout.mjs";
 import { videoUrlsOf, videoFileIssues } from "./video-checks.mjs";
 import { CTA, ctaFoldIssues } from "./fold-check.mjs";
@@ -221,6 +222,8 @@ export function parseHtml(html, url) {
     const to = src ? normalize(src, url) : null;
     if (to) imgs.push(to);
     if (!$(i).attr("alt") && $(i).attr("alt") !== "" && $(i).attr("role") !== "presentation") d.imgNoAlt = (d.imgNoAlt || 0) + 1;
+    const alt = ($(i).attr("alt") || "").trim();
+    if (alt && (d.imgAlts || []).length < 30) (d.imgAlts = d.imgAlts || []).push(alt.slice(0, 120)); // keyword placement (keyword-fit.mjs)
   });
   // mixed content
   if (url.startsWith("https://")) {
@@ -293,12 +296,18 @@ export function parseHtml(html, url) {
   d.visibleBytes = Buffer.byteLength($t("body").text().replace(/\s+/g, " ").trim());
   // Booking and claim pages are mostly form fields; their labels and options are the content.
   d.formShare = +($("form").toArray().reduce((n, f) => n + ($.html(f) || "").length, 0) / Math.max(html.length, 1)).toFixed(2);
+  // AI-style and depth signals in the main text (ai-style.mjs): only the scores and what to fix are kept.
+  const style = aiStyleFromDom($t, scope);
+  if (style) d.aiStyle = { score: style.score, problems: style.problems.slice(0, 6), depth: style.depth.score, depthProblems: style.depth.problems };
   const paras = scope.find("p").map((_, p) => $t(p).text().replace(/\s+/g, " ").trim()).get().filter((p) => p.split(" ").length >= 25);
   // Very long paragraphs: over 180 words, the top of the citable-passage range (ai_no_citable_block, ai_no_answer
   // ask for 40–180 words), so the checks never contradict each other.
   const longParas = paras.map((p) => p.split(" ").length).filter((n) => n > 180);
   if (longParas.length) { d.longParas = longParas.length; d.longParaMax = Math.max(...longParas); }
   const firstPos = paras.length ? text.indexOf(paras[0].slice(0, 40)) / Math.max(text.length, 1) : 1;
+  // Opening paragraph of the main content (keyword placement in keyword-fit.mjs): the first <p> of 12+ words.
+  const opening = scope.find("p").map((_, p) => $t(p).text().replace(/\s+/g, " ").trim()).get().find((p) => p.split(" ").length >= 12);
+  if (opening) d.firstPara = opening.slice(0, 400);
   // Up to 180 words, the same range as a citable passage (ai_no_citable_block): a 150-word opening paragraph that
   // answers the question is both. The old 120-word cap made the two checks contradict each other.
   d.answerEarly = paras.length > 0 && firstPos <= 0.3 && paras[0].split(" ").length <= 180;

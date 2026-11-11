@@ -107,8 +107,33 @@ if (cmd === "add") {
   console.log(r.verdict);
   for (const f of r.flagged) console.log(`  spam? ${f.site} (${f.linkingPages} pages): ${f.reasons.join("; ")}`);
   for (const x of r.sites.filter((x) => x.type !== "spam")) console.log(`  ${x.type.padEnd(9)} ${x.site} (${x.linkingPages})`);
+} else if (cmd === "keyword-fit") {
+  // keyword-fit <projectId> "<keyword>" [--url <page>] [--serp <results.json>] [--allintitle N] [--limit 50|300]
+  // Where the page uses the keyword (latest audit) and, with a saved SERP file, the "untapped keyword" test.
+  const { readFileSync } = await import("node:fs");
+  const { placement, untappedTest, resultsFromJson } = await import("./keyword-fit.mjs");
+  const opt = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
+  const a = get("SELECT id FROM audits WHERE project_id=? AND status='done' ORDER BY id DESC LIMIT 1", Number(a1));
+  if (!a) throw new Error("no finished audit for that project");
+  const url = opt("--url");
+  const rows = all("SELECT url, final_url, title, description, h1, inlinks, data FROM pages WHERE audit_id=? AND status=200 AND indexable=1", a.id);
+  const pick = url ? rows.filter((r) => r.url === url || r.final_url === url) : rows;
+  const scored = pick.map((r) => placement(a2, { ...r, data: JSON.parse(r.data || "{}") })).map((p, i) => ({ ...p, url: pick[i].final_url || pick[i].url }));
+  scored.sort((x, y) => (y.score ?? -1) - (x.score ?? -1));
+  for (const p of scored.slice(0, url ? 1 : 5)) {
+    console.log(`${p.score ?? "?"}%  ${p.url}`);
+    console.log("   " + Object.entries(p.slots).map(([k, v]) => `${k}:${v === null ? "?" : v ? "yes" : "NO"}`).join("  "));
+    console.log(`   internal links in ${p.extras.internalLinksIn ?? "?"}, external links ${p.extras.externalLinks ?? "?"}, video ${p.extras.video ?? "?"}, schema ${p.extras.schema}`);
+  }
+  if (opt("--serp")) {
+    const t = untappedTest(a2, resultsFromJson(JSON.parse(readFileSync(opt("--serp"), "utf8"))),
+      { allintitle: opt("--allintitle") != null ? Number(opt("--allintitle")) : null, limit: Number(opt("--limit") || 50) });
+    console.log(`\n"${a2}": ${t.verdict.toUpperCase()}  ` + Object.entries(t.signals).map(([k, v]) => `${k} ${v}`).join(", "));
+    for (const w of t.weak) console.log(`   weak #${w.rank}: ${w.url} (${w.why})`);
+    for (const r of t.irrelevant) console.log(`   off-topic #${r.rank}: ${r.title} (${r.url})`);
+  }
 } else if (cmd === "install") {
   const { installDesktopShortcut, setAutostart } = await import("./desktop.mjs");
   console.log("desktop shortcut:", await installDesktopShortcut());
   if (process.argv.includes("--autostart")) console.log("start with Windows:", await setAutostart(true));
-} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | offpage <gsc-links.csv> [--site host] | templated <projectId> [--share 0.4] | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");
+} else console.log("usage: add <url> [name] | list | audit <projectId> [--max N] [--js] | similar <projectId> [--min 0.2] | link-ideas <projectId> | offpage <gsc-links.csv> [--site host] | keyword-fit <projectId> "<keyword>" [--url U] [--serp file.json] [--allintitle N] [--limit 50] | templated <projectId> [--share 0.4] | install [--autostart] | change <projectId> <yyyy-mm-dd> <kind> \"<summary>\" <url> [url...] [--ref <text>] | changes <projectId> | schedule install [--time 06:00] | schedule remove | schedule status | run-scheduled");
