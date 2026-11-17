@@ -111,18 +111,64 @@ if (cmd === "add") {
   // ai-check <file.html|file.md|file.txt|url|-> [...]: AI-wording check before anything is published or sent.
   // "-" reads stdin. Exit code 1 when any input fails (phrase tells, or an ai-style score under 85 on 300+ words).
   const { readFileSync } = await import("node:fs");
+  // --detect also runs the model-based detector (ai-detect.mjs); the input then has to pass both.
   const { aiCheck } = await import("./ai-check.mjs");
-  let failed = 0;
-  for (const src of process.argv.slice(3)) {
+  const withDetect = process.argv.includes("--detect");
+  const srcs = process.argv.slice(3).filter((a) => a !== "--detect");
+  const inputs = [];
+  for (const src of srcs) {
     const isUrl = /^https?:\/\//i.test(src);
     const body = src === "-" ? readFileSync(0, "utf8") : isUrl ? await (await fetch(src, { headers: { "user-agent": "Mozilla/5.0 seo-auditor ai-check" } })).text() : readFileSync(src, "utf8");
     const kind = isUrl || /\.html?$/i.test(src) || /^\s*<(!doctype|html|section|main|div|p)\b/i.test(body) ? "html" : "text";
+    inputs.push({ src, body, kind });
+  }
+  let det = [];
+  if (withDetect) {
+    const { detectAi, textFromHtml, textFromMarkdown } = await import("./ai-detect.mjs");
+    det = await detectAi(inputs.map((x) => (x.kind === "html" ? textFromHtml(x.body) : /\.md$/i.test(x.src) ? textFromMarkdown(x.body) : x.body)));
+  }
+  const { detectVerdict } = withDetect ? await import("./ai-detect.mjs") : {};
+  let failed = 0;
+  inputs.forEach(({ src, body, kind }, i) => {
     const r = aiCheck(body, kind);
-    if (!r.pass) failed++;
-    console.log(`${r.pass ? "PASS" : "FAIL"}  ${src}${r.style ? `  (style ${r.style.score})` : "  (under " + r.minWords + " words: phrase check only)"}`);
+    const d = withDetect ? detectVerdict(det[i]) : null;
+    const pass = r.pass && (!d || d.pass);
+    if (!pass) failed++;
+    console.log(`${pass ? "PASS" : "FAIL"}  ${src}${r.style ? `  (style ${r.style.score})` : "  (under " + r.minWords + " words: phrase check only)"}${d ? `  (detector: ${d.percent}% AI, ${d.label})` : ""}`);
     for (const h of r.hits) console.log(`   line ${h.line}: ${h.tell}: "${h.match}"`);
     for (const p of r.style?.problems || []) console.log(`   style: ${p}`);
+    if (d) for (const c of det[i].chunks.filter((c) => (c.ai ?? 0) >= 0.5)) console.log(`   detector: ${Math.round(c.ai * 100)}% AI: "${c.text.slice(0, 110)}…"`);
+  });
+  process.exitCode = failed ? 1 : 0;
+} else if (cmd === "ai-detect") {
+  // ai-detect <file.html|file.md|file.txt|url|-> [...] [--json] [--signals tuned,desklib,fakespot,binoculars]:
+  // model-based AI-text likelihood, GPTZero-style, run locally (detector/detect.py, fine-tuned DeBERTa by default).
+  // Shows the page percentage and the blocks of about 220 words, most AI-like first. Exit 1 when any input fails.
+  const { readFileSync } = await import("node:fs");
+  const { detectAi, detectVerdict, textFromHtml, textFromMarkdown } = await import("./ai-detect.mjs");
+  const json = process.argv.includes("--json");
+  const si = process.argv.indexOf("--signals");
+  const signals = si > 0 ? process.argv[si + 1].split(",") : undefined;
+  const srcs = process.argv.slice(3).filter((a, i, all) => a !== "--json" && a !== "--signals" && all[i - 1] !== "--signals");
+  const texts = [];
+  for (const src of srcs) {
+    const isUrl = /^https?:\/\//i.test(src);
+    const body = src === "-" ? readFileSync(0, "utf8") : isUrl ? await (await fetch(src, { headers: { "user-agent": "Mozilla/5.0 seo-auditor ai-detect" } })).text() : readFileSync(src, "utf8");
+    const html = isUrl || /\.html?$/i.test(src) || /^\s*<(!doctype|html|section|main|div|p)\b/i.test(body);
+    texts.push(html ? textFromHtml(body) : /\.md$/i.test(src) ? textFromMarkdown(body) : body);
   }
+  const res = await detectAi(texts, { signals });
+  if (json) console.log(JSON.stringify(res.map((r, i) => ({ src: srcs[i], ...r })), null, 2));
+  let failed = 0;
+  if (!json) res.forEach((r, i) => {
+    const v = detectVerdict(r);
+    if (!v.pass) failed++;
+    const s = r.signals;
+    console.log(`${v.pass ? "PASS" : "FAIL"}  ${srcs[i]}  ${v.percent}% AI (${v.label}), ${r.words} words, ${r.chunks.length} blocks`);
+    const extra = Object.entries(s).filter(([k]) => k !== "tuned").map(([k, x]) => `${k} ${k === "binoculars" ? x.toFixed(3) : Math.round(x * 100) + "%"}`);
+    if (extra.length) console.log(`   other signals: ${extra.join(", ")}`);
+    for (const c of [...r.chunks].sort((a, b) => (b.ai ?? 0) - (a.ai ?? 0)).slice(0, 5)) console.log(`   ${String(Math.round((c.ai ?? 0) * 100)).padStart(3)}%  "${c.text.slice(0, 120)}…"`);
+  });
   process.exitCode = failed ? 1 : 0;
 } else if (cmd === "keyword-fit") {
   // keyword-fit <projectId> "<keyword>" [--url <page>] [--serp <results.json>] [--allintitle N] [--limit 50|300]

@@ -1,6 +1,6 @@
 // AI-style signals in a page's main text (2026-11-10). No check can prove who wrote a text, and Google's guidance is
 // that helpful content is fine however it's made. These are the habits of unedited AI drafts that readers notice:
-// every sentence the same length, few short sentences, one word opening many sentences, "Label: text" bullet lists,
+// every sentence the same length, choppy runs of very short sentences, one word opening many sentences, "Label: text" bullet lists,
 // three-item lists everywhere, stock phrases and the same phrasing said again. A careful human editor removes them.
 // Calibrated on one site's blog: 26 AI-drafted posts averaged 75.6, the same posts after a surface rewrite 75.8,
 // and the same posts rewritten by an editor to this standard 99-100. The page check flags scores under 85.
@@ -65,7 +65,10 @@ export function aiStyle({ paragraphs = [], items = [], labelItems = 0, headings 
   const pen = [];
   const add = (cond, pts, why) => { if (cond) pen.push([pts, why]); };
   add(sig.sentenceLenCV < 0.42, 15, `sentence lengths too even (variation ${sig.sentenceLenCV}, want 0.42+)`);
-  add(sig.shortSentShare < 0.12, 10, `few short sentences (${Math.round(sig.shortSentShare * 100)}% of 8 words or fewer, want 12%+)`);
+  // 2026-11-14: reversed. Measured on 1,774 pre-2022 human web passages vs 1,180 Claude draft passages (SEO Auditor
+  // detector dataset), very short sentences are a machine habit: 7% of human sentences have 6 words or fewer, 14% of
+  // Claude's. The old "few short sentences, want 12%+" rule pushed rewrites toward choppy AI rhythm.
+  add(sig.shortSentShare > 0.2, 10, `too many very short sentences (${Math.round(sig.shortSentShare * 100)}% of 8 words or fewer, human writing ~10%)`);
   add(sig.topOpenerShare > 0.12, 10, `"${sig.topOpener}" starts ${Math.round(sig.topOpenerShare * 100)}% of sentences`);
   add(sig.paraLenSD < 0.8 && paragraphs.length > 6, 10, `paragraphs all the same size`);
   add(sig.tripletsPer1k > 6, 10, `"A, B and C" lists everywhere (${sig.tripletsPer1k} per 1,000 words)`);

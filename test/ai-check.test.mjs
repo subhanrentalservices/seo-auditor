@@ -48,6 +48,11 @@ test("Markdown and HTML are split into paragraphs, list items and headings", () 
   assert.deepEqual(html.headings, ["Why"]);
 });
 
+test("a step that only contains a bold button name is not a label bullet", () => {
+  const html = partsFromHtml("<main><ol><li>Open the photo and tap <strong>Edit</strong>.</li><li><strong>General info</strong> has the basics.</li><li><strong>Cost:</strong> low</li><li><strong>Speed</strong>: fast</li></ol></main>");
+  assert.equal(html.labelItems, 2);
+});
+
 test("long text gets the ai-style score too and fails under 85", () => {
   const even = Array.from({ length: 60 }, (_, i) => `The workshop checks item number ${i} carefully before the car goes back to the customer.`).join(" ");
   const r = aiCheck(even);

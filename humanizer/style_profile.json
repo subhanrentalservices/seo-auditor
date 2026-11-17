@@ -1,0 +1,166 @@
+{
+ "human": {
+  "sentence_mean": {
+   "p25": 17.2,
+   "median": 20.5,
+   "p75": 24.9
+  },
+  "sentence_sd": {
+   "p25": 6.7,
+   "median": 8.8,
+   "p75": 11.8
+  },
+  "short_share": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 10.0
+  },
+  "long_share": {
+   "p25": 8.3,
+   "median": 14.3,
+   "p75": 28.6
+  },
+  "contractions": {
+   "p25": 5.6,
+   "median": 13.4,
+   "p75": 26.0
+  },
+  "first_person": {
+   "p25": 0.0,
+   "median": 5.6,
+   "p75": 18.1
+  },
+  "second_person": {
+   "p25": 0.0,
+   "median": 16.0,
+   "p75": 39.5
+  },
+  "hedges": {
+   "p25": 0.0,
+   "median": 5.8,
+   "p75": 11.6
+  },
+  "colons": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 6.5
+  },
+  "semicolons": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 0.0
+  },
+  "brackets": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 6.6
+  },
+  "or_rate": {
+   "p25": 0.0,
+   "median": 5.2,
+   "p75": 9.6
+  },
+  "so_rate": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 5.6
+  },
+  "conj_start": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 10.0
+  },
+  "ai_start": {
+   "p25": 0.0,
+   "median": 7.7,
+   "p75": 14.3
+  },
+  "words_per_paragraph": {
+   "p25": 156.0,
+   "median": 169.0,
+   "p75": 189.0
+  }
+ },
+ "claude": {
+  "sentence_mean": {
+   "p25": 13.7,
+   "median": 15.9,
+   "p75": 18.4
+  },
+  "sentence_sd": {
+   "p25": 6.1,
+   "median": 7.4,
+   "p75": 9.0
+  },
+  "short_share": {
+   "p25": 0.0,
+   "median": 9.1,
+   "p75": 18.2
+  },
+  "long_share": {
+   "p25": 0.0,
+   "median": 7.1,
+   "p75": 11.1
+  },
+  "contractions": {
+   "p25": 0.0,
+   "median": 6.9,
+   "p75": 18.4
+  },
+  "first_person": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 6.8
+  },
+  "second_person": {
+   "p25": 7.1,
+   "median": 17.6,
+   "p75": 29.9
+  },
+  "hedges": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 6.4
+  },
+  "colons": {
+   "p25": 5.1,
+   "median": 7.9,
+   "p75": 16.4
+  },
+  "semicolons": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 0.0
+  },
+  "brackets": {
+   "p25": 0.0,
+   "median": 5.5,
+   "p75": 10.8
+  },
+  "or_rate": {
+   "p25": 5.6,
+   "median": 10.6,
+   "p75": 16.8
+  },
+  "so_rate": {
+   "p25": 0.0,
+   "median": 6.1,
+   "p75": 10.2
+  },
+  "conj_start": {
+   "p25": 0.0,
+   "median": 0.0,
+   "p75": 0.0
+  },
+  "ai_start": {
+   "p25": 10.0,
+   "median": 20.0,
+   "p75": 30.0
+  },
+  "words_per_paragraph": {
+   "p25": 150.0,
+   "median": 160.0,
+   "p75": 175.0
+  }
+ }
+}

@@ -63,7 +63,16 @@ export function partsFromHtml(html) {
   const t = (e) => $(e).text().replace(/\s+/g, " ").trim();
   const paragraphs = scope.find("p").map((_, e) => t(e)).get().filter(Boolean);
   const items = scope.find("li").map((_, e) => t(e)).get().filter(Boolean);
-  const labelItems = scope.find("li").filter((_, e) => /^(strong|b)$/i.test($(e).children().first().prop("tagName") || "") && /^[^:]{1,40}[:.–—-]/.test(t(e))).length;
+  // Same rule as aiStyleFromDom: a label bullet starts with its bold lead ("**Speed:** fast"), not a step that merely
+  // contains a bold button name ("Open the photo and tap **Edit**.").
+  const labelItems = scope.find("li").filter((_, e) => {
+    const first = $(e).children("strong, b").first();
+    if (!first.length) return false;
+    const lead = first.text().trim();
+    const text = t(e);
+    const after = text.slice(text.indexOf(lead) + lead.length);
+    return lead.length <= 60 && text.startsWith(lead) && (/[:.]$/.test(lead) || /^\s*[:–—-]/.test(after));
+  }).length;
   const headings = scope.find("h2,h3,h4").map((_, e) => t(e)).get().filter(Boolean);
   return { paragraphs, items, labelItems, headings, text: [...headings, ...paragraphs, ...items].join("\n") };
 }

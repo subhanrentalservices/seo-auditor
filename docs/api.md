@@ -23,7 +23,7 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/audits/:auditId/export/issues.csv` | Issues CSV (also `pages.csv` with custom extraction columns, and `links.csv`). |
 | any | `/lv/…`, `/api/s/…`, `/s/…`, `/fonts/…` | Link building: passed to the link engine on 127.0.0.1:4561. |
 
-## Routes (129)
+## Routes (140)
 
 ### core (server.mjs, api.mjs)
 
@@ -370,6 +370,22 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/projects/:projectId/indexnow/changed` | Pages new or changed since the previous audit (to submit). |
 | POST | `/api/projects/:projectId/indexnow` | body: `urls` (the site's own host only). Submits them to IndexNow. |
 | POST | `/api/projects/:projectId/indexnow/check-key` | Checks that `<key>.txt` is live on the site. |
+
+### human-writer.mjs
+
+| Method | Path | Parameters and notes |
+|---|---|---|
+| GET | `/api/writer/options` | Human Writer: purposes, English variants, tones, reading levels, lengths, Claude models, settings and this month's Claude cost. |
+| POST | `/api/writer/settings` | body: `monthlyCapUsd`, `maxRounds`, `model`. Human Writer settings. |
+| POST | `/api/writer/check` | body: `text`, `variant`. Local detector score per 150+ word block, AI phrases and style, variant spelling. No Claude, no cost. |
+| POST | `/api/writer/hotspots` | body: `text` (one block). How much the score falls when each sentence is left out. |
+| POST | `/api/writer/facts` | body: `text`, `purpose`. Claude lists the facts a rewrite must keep (one Sonnet call, counted in the monthly limit). |
+| POST | `/api/writer/runs` | body: `text`, `reference` (optional live page whose structure, links and numbers are kept), `facts`, `purpose`, `variant`, `tone`, `level`, `length`, `keyword`, `notes`, `mode` (translate, edit, rewrite or write), `model`, `maxRounds`. Queues a detect, rewrite, detect loop. |
+| GET | `/api/writer/runs` | q: `batch`. Recent Human Writer runs with before and after scores, rounds, cost and status. |
+| GET | `/api/writer/runs/:runId` | One run: every round's block scores, fact check, AI phrases, final text, meaning check, cost. |
+| POST | `/api/writer/runs/:runId/stop` | Stops a run after its current step (or removes it from the queue). |
+| GET | `/api/writer/runs/:runId/export` | q: `format` (md, txt or docx). The final text as a download. |
+| POST | `/api/writer/batch` | body: `folder` (read only), `urls` (pages; main content as Markdown, robots.txt obeyed) or `texts`, plus the run options. Queues every .md and .txt file; results are saved to data/writer-out/<batch>/. |
 
 ### alerts.mjs
 

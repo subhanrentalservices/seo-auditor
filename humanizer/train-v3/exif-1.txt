@@ -1,0 +1,41 @@
+=== original (live page)
+Everything about EXIF follows from one fact: the data is part of the photo file. It isn't kept in your phone's settings or in the cloud. It goes wherever the file goes, whether that's an email attachment, a USB stick, a cloud folder or a file transfer. You don't see it in normal viewing, only when you open a photo's info panel or a metadata viewer.
+
+Most cameras and phones write EXIF automatically into JPEG and HEIC photos. PNG and WebP files can carry metadata too, though screenshots and graphics usually carry much less.
+
+EXIF is also only one kind of photo metadata. Editing apps and photo agencies use XMP and IPTC metadata, which can hold captions, keywords, copyright notices and editing history. "Photo metadata" or "image metadata" covers all of these, and EXIF is the part your camera writes.
+
+=== A how-to site 2015
+The important thing to understand about EXIF is that it lives inside the image file itself. Your phone doesn't keep a separate record of it somewhere in its settings, and it isn't stored on some server in the cloud. If you email a photo to a friend, copy it to a flash drive, or upload it to Dropbox, the EXIF data goes right along with it. You just won't notice, because image viewers don't show it unless you go looking in the file's properties or open it in a dedicated metadata tool.
+
+Pretty much every digital camera and smartphone writes EXIF data to JPEG files automatically, and newer iPhones do the same with HEIC. PNG and WebP images can hold metadata as well, but screenshots and web graphics tend to have very little in them.
+
+It's also worth pointing out that EXIF isn't the only kind of metadata a photo can have. Programs like Lightroom and Photoshop, along with stock photo agencies, use formats called XMP and IPTC to store things like captions, keywords, copyright info, and a history of edits. When people talk about "photo metadata" they usually mean all of it, while EXIF is just the part that comes from the camera.
+
+=== B forum reply
+So the thing with EXIF is it's literally baked into the file. It's not a phone setting and it's not sitting on Google's or Apple's servers somewhere, it's in the JPEG. Email the picture, put it on a USB stick, drop it in a shared folder, whatever, the data comes with it. You'd never know unless you open the info panel or run it through a metadata viewer.
+
+Basically every phone and camera writes it into JPEGs (and HEIC on newer iPhones) without asking you. PNGs and WebPs can have metadata too, but in my experience screenshots barely have anything in them.
+
+Also, EXIF is only one flavour. Lightroom, Photoshop and the stock agencies use XMP and IPTC for captions, keywords, copyright and edit history. "Photo metadata" is the umbrella term, EXIF is just the camera's part of it.
+
+=== C plain textbook
+EXIF data is stored in the image file. It is not saved in the device settings or online. When the file is copied, sent by email, saved to a USB drive or uploaded to cloud storage, the EXIF data is copied with it. It is normally hidden and can only be seen in the file properties or in a metadata viewer.
+
+Digital cameras and mobile phones add EXIF data to JPEG and HEIC images automatically. PNG and WebP images can also contain metadata, but screenshots and graphics usually contain less.
+
+EXIF is one type of image metadata. Image editing programs and photo agencies use XMP and IPTC metadata to store captions, keywords, copyright information and editing history. The terms photo metadata and image metadata include all of these types. EXIF is the metadata written by the camera.
+
+=== D news feature
+Most people who post a photo online have no idea they may be sharing more than the picture. Tucked inside nearly every image taken on a smartphone is a block of hidden data, known as EXIF, that travels with the file wherever it goes, whether it is emailed, copied onto a memory stick or uploaded to a cloud service.
+
+The data is written automatically by cameras and phones into JPEG and HEIC files. PNG and WebP images can carry it too, although screenshots typically hold far less.
+
+And EXIF is only part of the picture. Professional editing software and photo agencies add their own layers, in formats called XMP and IPTC, which can record captions, keywords, copyright notices and a file's editing history.
+
+=== E personal blog, opinion, idiosyncratic rhythm
+I used to think photo metadata was some setting on my phone. It isn't. EXIF sits inside the file, right next to the pixels, which means it rides along on every copy you make: the email attachment, the USB stick, the shared Drive folder, all of them. Nothing on screen tells you it's there. You have to go digging in the info panel (or a metadata viewer) to see it at all, and honestly most people never do.
+
+Phones and cameras stamp it into JPEG and HEIC files on their own. PNG and WebP can hold metadata too, though a screenshot usually has next to nothing.
+
+One more wrinkle. EXIF is just the camera's slice of the metadata pie; Lightroom, Photoshop and the photo agencies pile on XMP and IPTC with captions, keywords, copyright lines and edit history.

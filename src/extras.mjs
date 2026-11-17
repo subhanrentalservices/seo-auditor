@@ -158,7 +158,7 @@ const normWords = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " 
 
 /** I8: ask the owner's local Claude Code for a concrete fix. No tools, no MCP: it can only answer in text. */
 const asking = new Set();
-function claudeBin() {
+export function claudeBin() {
   if (process.platform !== "win32") return "claude";
   const exe = path.join(process.env.APPDATA || "", "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
   if (!existsSync(exe)) fail(400, "Claude Code is not installed (npm i -g @anthropic-ai/claude-code)");

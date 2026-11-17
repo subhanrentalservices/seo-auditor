@@ -15,6 +15,7 @@ import "./views-competitors.js"; // after views-ideas: "Competitors" sits right 
 import "./views-research.js"; // after views-competitors: "Research" and "Content inventory" sit right below "Competitors"
 import "./views-local.js";
 import "./views-integrations.js"; // before views-alerts: Google sign-in card in App settings; Bing and Analytics screens below Search Console
+import "./views-writer.js"; // "Human Writer" right below AI audit
 import "./views-alerts.js"; // last: anchors "Alerts" before Settings (after Report) and needs App settings from views-paid
 
 NAV.splice(NAV.findIndex((n) => n.view === "ai") + 1, 0, { view: "performance", label: "Performance" });

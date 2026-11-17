@@ -122,7 +122,7 @@ export const MODULES = ["./cwv.mjs", "./gsc.mjs", "./dataforseo.mjs", "./visibil
   "./gsc-history.mjs", "./rank.mjs", "./gsc-sitemaps.mjs", "./gsc-discover.mjs", "./index-rotation.mjs", "./gsc-explorer.mjs",
   "./issue-trends.mjs", "./alert-channels.mjs", "./task-schedule.mjs", "./report-delivery.mjs", "./page-compare.mjs", "./aio-gap.mjs", "./competitor-pages.mjs", "./link-gap.mjs",
   "./kw-ideas.mjs", "./clusters.mjs", "./competitor-gap.mjs", "./content-inventory.mjs", "./content-brief.mjs", "./page-content.mjs",
-  "./google-auth.mjs", "./ga4.mjs", "./bing.mjs", "./indexnow.mjs", "./alerts.mjs"]; // alerts last: it reads data the others refresh after an audit
+  "./google-auth.mjs", "./ga4.mjs", "./bing.mjs", "./indexnow.mjs", "./human-writer.mjs", "./alerts.mjs"]; // alerts last: it reads data the others refresh after an audit
 
 
 /** Imports each module and calls its register(ctx). A module that is missing or fails (also one whose own import is

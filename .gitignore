@@ -17,3 +17,22 @@ release/
 backlinks/dist/
 backlinks/build/
 backlinks/*.spec
+
+detector/.venv-gpu/
+detector/finetuned/
+detector/dataset/data/
+detector/finetuned-*/
+humanizer/model/
+humanizer/llama/
+humanizer/out/
+humanizer/*.log
+data/ai-detect/
+humanizer/test-*
+humanizer/models/
+humanizer/model-smaug/
+humanizer/test-*
+
+# third-party article text used in detector tests (kept local, like the dataset)
+humanizer/train-v3/human-exif.txt
+humanizer/train-v3/eff-edit.txt
+humanizer/train-v3/levers.txt
