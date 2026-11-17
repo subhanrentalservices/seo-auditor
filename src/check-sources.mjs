@@ -40,7 +40,7 @@ const DOCS = {
 const RULES = [
   [/^(missing_title|dup_title|title_\w+|dup_title_h1)$/, "titles"],
   [/^(missing_description|dup_description|desc_length)$/, "snippets"],
-  [/^(redirect_chain|temporary_redirect|permanent_redirect|meta_refresh|js_redirect|redirect_to_home|links_to_redirect|host_variant_redirect)$/, "redirects"],
+  [/^(redirect_chain|temporary_redirect|permanent_redirect|meta_refresh|js_redirect|redirect_to_home|links_to_redirect|host_variant_redirect|host_variant_chain)$/, "redirects"],
   [/^(dup_content|near_duplicate|canonical_\w+|missing_canonical|url_variant_200|links_to_canonicalized|sitemap_non_canonical|internal_link_tracking_params)$/, "duplicates"],
   [/^(http_4xx|http_5xx|soft_404|soft_404_content|sitemap_fetch_error)$/, "http"],
   [/^(robots_txt_syntax|robots_group_override|robots_other_bot|robots_txt_large|robots_txt_error)$/, "robotsSpec"],

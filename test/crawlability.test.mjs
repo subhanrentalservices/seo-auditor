@@ -84,3 +84,19 @@ test("parameter traps: many ?variants of one path, not a handful", () => {
   const urls = [...Array(35)].map((_, i) => `${S}shop.html?colour=${i}`).concat([...Array(5)].map((_, i) => `${S}book.html?service=${i}`), [S]);
   assert.deepEqual(paramTraps(urls), [[S + "shop.html", 35]]);
 });
+
+test("http://www that goes via https://www before the main address is a redirect chain", async () => {
+  const r = await hostVariants(S, "ua", web({ ...goodHosts, "http://www.acmemotors.com.au/": { status: 301, location: "https://www.acmemotors.com.au/" } }));
+  assert.deepEqual(ids(r), ["host_variant_chain"]);
+  assert.match(r[0][2], /http:\/\/www\.acmemotors\.com\.au \(301\) → https:\/\/www\.acmemotors\.com\.au \(301\) → https:\/\/acmemotors\.com\.au \(200\)/);
+});
+
+test("response headers: a duplicated Vary value and HTML that waits on a slow origin are reported", async () => {
+  const { responseHeaderIssues } = await import("../src/crawlability.mjs");
+  const r = { status: 200, ms: 300, headers: { vary: "Accept-Encoding,Accept-Encoding", cache: "DYNAMIC", timing: "cfEdge;dur=17,cfOrigin;dur=1657", cacheControl: "no-transform" } };
+  assert.deepEqual(ids(responseHeaderIssues(S, r)), ["html_slow_origin", "vary_duplicate"]);
+  assert.match(responseHeaderIssues(S, r).find((x) => x[0] === "html_slow_origin")[2], /origin took 1657 ms/);
+  // cached at the edge, or quick: nothing
+  assert.deepEqual(responseHeaderIssues(S, { ...r, headers: { ...r.headers, vary: "Accept-Encoding", cache: "HIT" } }), []);
+  assert.deepEqual(responseHeaderIssues(S, { ...r, headers: { ...r.headers, vary: "", timing: "" }, ms: 200 }), []);
+});

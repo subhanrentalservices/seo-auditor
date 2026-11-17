@@ -8,10 +8,13 @@ import { robotsDirectives, metaRobotsTags } from "./google-signals.mjs";
  *  The HTML body is kept for 200 and for 4xx/5xx error pages (the site's 404 page is compared with crawled pages). */
 export async function probe(url, ua, timeout = 15000) {
   try {
+    const t0 = Date.now();
     const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(timeout), headers: { "User-Agent": ua, Accept: "text/html,*/*;q=0.8" } });
     const type = res.headers.get("content-type") || "";
     const body = (res.status === 200 || res.status >= 400) && /html/.test(type) ? (await res.text()).slice(0, 2_000_000) : "";
-    return { status: res.status, location: res.headers.get("location"), body, xRobots: res.headers.get("x-robots-tag") || "" };
+    const h = (n) => res.headers.get(n) || "";
+    return { status: res.status, location: res.headers.get("location"), body, xRobots: h("x-robots-tag"), ms: Date.now() - t0,
+      headers: { vary: h("vary"), cache: h("cf-cache-status") || h("x-cache") || h("x-litespeed-cache"), timing: h("server-timing"), cacheControl: h("cache-control") } };
   } catch (e) {
     const code = e.cause?.code || e.code || (e.name === "TimeoutError" ? "TIMEOUT" : "ERROR");
     return { status: 0, error: code, detail: e.cause?.message || e.message };
@@ -51,7 +54,24 @@ export async function hostVariants(start, ua, get = probe) {
     const end = new URL(last.url).origin;
     if (end !== canonical || last.status !== 200) out.push(["host_variant_redirect", origin + "/", `ends at ${last.url} (HTTP ${last.status}), not ${canonical}/`]);
     else if (![301, 308].includes(hops[0].status)) out.push(["host_variant_redirect", origin + "/", `first redirect is ${hops[0].status}, use 301`]);
+    // two or more redirects before the page (e.g. http://www → https://www → https://): one hop is enough
+    else if (hops.length > 2) out.push(["host_variant_chain", origin + "/", hops.map((x) => x.url.replace(/\/$/, "") + " (" + x.status + ")").join(" → ")]);
   }
+  return out;
+}
+
+/** Response headers of the start page: the same Vary value sent twice (two layers adding it), and HTML that every
+ *  visit fetches from a slow origin because the CDN doesn't cache it (server-timing cfOrigin, or the measured wait). */
+export function responseHeaderIssues(url, r) {
+  const out = [], hd = r?.headers;
+  if (!hd || r.status !== 200) return out;
+  const vary = hd.vary.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const dup = vary.filter((v, i) => vary.indexOf(v) !== i);
+  if (dup.length) out.push(["vary_duplicate", url, `Vary: ${hd.vary}`]);
+  const origin = Number((hd.timing.match(/cfOrigin;dur=([\d.]+)/i) || [])[1]);
+  const wait = Number.isFinite(origin) && origin > 0 ? origin : r.ms;
+  const uncached = /^(DYNAMIC|MISS|BYPASS|EXPIRED)$/i.test(hd.cache) || !hd.cache;
+  if (uncached && wait >= 800) out.push(["html_slow_origin", url, `${Number.isFinite(origin) && origin > 0 ? "origin" : "response"} took ${Math.round(wait)} ms${hd.cache ? `, cache status ${hd.cache}` : ""}: every visit waits on the server`]);
   return out;
 }
 
@@ -69,9 +89,10 @@ export async function crawlabilitySiteIssues({ start, robotsRes, robotsTxt, robo
   if (robotsRes.status >= 500 || robotsRes.status === 0 || robotsRes.error)
     out.push(["robots_txt_error", origin + "/robots.txt", robotsRes.error ? `no response (${robotsRes.error})` : `HTTP ${robotsRes.status}`]);
   if (robotsTxt.length > 500 * 1024) out.push(["robots_txt_large", origin + "/robots.txt", `${Math.round(robotsTxt.length / 1024)} KiB`]);
+  const home = await get(start, ua);
+  out.push(...responseHeaderIssues(start, home));
   if (robotsTxt && robots.isAllowed(start, "Googlebot") === false) out.push(["robots_disallow_all", origin + "/robots.txt", "Googlebot may not fetch the start page"]);
   else if (robotsTxt) {
-    const home = await get(start, ua);
     const blocked = home.body ? assetUrls(home.body, start).filter((x) => robots.isAllowed(x, "Googlebot") === false) : [];
     if (blocked.length) out.push(["robots_blocks_resources", start, `${blocked.length} file(s), e.g. ${blocked.slice(0, 3).join(", ")}`]);
   }
