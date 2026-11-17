@@ -258,3 +258,22 @@ test("a low round with a lost fact is repaired instead of thrown away, and a mea
   assert.equal(r.status, "passed", r.message);
   assert.equal(seen.filter((p) => p.includes("Fix only these problems")).length, 2);
 });
+
+test("with concurrency 2 two runs overlap, and the setting is capped at 3", async () => {
+  let now = 0, peak = 0;
+  W.setClaude(async (prompt) => {
+    now++; peak = Math.max(peak, now);
+    await new Promise((r) => setTimeout(r, 30));
+    now--;
+    const z = { cost: 0, tokensIn: 0, tokensOut: 0 };
+    if (prompt.includes("List every fact")) return { text: "- x", ...z };
+    if (prompt.includes("Compare the ORIGINAL")) return { text: '{"ok":true,"issues":[]}', ...z };
+    return { text: `<text>${SOURCE.replace("draftish ", "")}</text>`, ...z };
+  });
+  assert.equal(W.saveSettings({ concurrency: 9 }).concurrency, 3);
+  W.saveSettings({ concurrency: 2 });
+  W.startRun({ text: SOURCE, maxRounds: 1 }); W.startRun({ text: SOURCE, maxRounds: 1 });
+  await W.idle();
+  W.saveSettings({ concurrency: 1 });
+  assert.equal(peak, 2);
+});

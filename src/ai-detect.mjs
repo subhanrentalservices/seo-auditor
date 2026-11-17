@@ -46,8 +46,16 @@ export function textFromMarkdown(md) {
     .join("\n");
 }
 
+// One detector process at a time (owner, 2026-11-17): two at once on a 4 GB GPU crashed the models, and Human Writer
+// runs can now overlap, so their calls queue here.
+let gate = Promise.resolve();
 /** Score texts with the local models. Returns [{ ai, words, signals, chunks: [{ text, words, ai, signals }] }]. */
-export function detectAi(texts, { python = defaultPython(), signals, model, whole } = {}) {
+export function detectAi(texts, opts = {}) {
+  const job = gate.then(() => detectAiOnce(texts, opts));
+  gate = job.catch(() => {});
+  return job;
+}
+function detectAiOnce(texts, { python = defaultPython(), signals, model, whole } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(python, [SCRIPT], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     let out = "", err = "";

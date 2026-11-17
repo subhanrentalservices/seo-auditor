@@ -59,13 +59,14 @@ export const MODELS = { opus: "Claude Opus (best writing)", sonnet: "Claude Sonn
 // ---------- settings and cost ----------
 const setting = (k, d) => { const r = get("SELECT value FROM writer_settings WHERE key=?", k); return r ? JSON.parse(r.value) : d; };
 export function settings() {
-  return { monthlyCapUsd: setting("monthlyCapUsd", 25), maxRounds: setting("maxRounds", 4), model: setting("model", "opus") };
+  return { monthlyCapUsd: setting("monthlyCapUsd", 25), maxRounds: setting("maxRounds", 4), model: setting("model", "opus"), concurrency: setting("concurrency", 1) };
 }
 export function saveSettings(b) {
   const s = settings();
   if (b.monthlyCapUsd !== undefined) s.monthlyCapUsd = Math.max(0, Math.min(1000, Number(b.monthlyCapUsd) || 0));
   if (b.maxRounds !== undefined) s.maxRounds = Math.max(1, Math.min(8, Math.round(Number(b.maxRounds) || 4)));
   if (b.model !== undefined && MODELS[b.model]) s.model = b.model;
+  if (b.concurrency !== undefined) s.concurrency = Math.max(1, Math.min(3, Math.round(Number(b.concurrency) || 1)));
   for (const [k, v] of Object.entries(s)) run("INSERT INTO writer_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", k, JSON.stringify(v));
   return s;
 }
@@ -331,11 +332,13 @@ const between = (s) => { const m = String(s).match(/<text>\s*([\s\S]*?)\s*<\/tex
 
 // ---------- runs ----------
 const queue = [];
-let busy = false, current = null;
+// Runs can overlap (settings.concurrency, default 1): one run's Claude calls proceed while another waits for the
+// detector, which ai-detect.mjs runs one process at a time.
+const active = new Set();
 /** A run marked running or queued that this process doesn't hold was cut off by a restart (checked when read, so a
  *  second server that fails to start can't mark another process's live run as stopped). */
 function settleOrphans() {
-  const live = new Set([...queue, current].filter(Boolean));
+  const live = new Set([...queue, ...active]);
   for (const r of all("SELECT id FROM writer_runs WHERE status IN ('running','queued')")) {
     if (!live.has(r.id)) run("UPDATE writer_runs SET status='stopped', message='The SEO Auditor was restarted during this run' WHERE id=?", r.id);
   }
@@ -379,16 +382,16 @@ export function startRun(b) {
 }
 
 function pump() {
-  if (busy || !queue.length) return;
-  busy = true;
-  const id = queue.shift();
-  current = id;
+  while (active.size < settings().concurrency && queue.length) start(queue.shift());
+}
+function start(id) {
+  active.add(id);
   execute(id).catch((e) => run("UPDATE writer_runs SET status='failed', message=?, finished_at=datetime('now') WHERE id=?", String(e.message || e).slice(0, 500), id))
-    .finally(() => { busy = false; current = null; pump(); });
+    .finally(() => { active.delete(id); pump(); });
 }
 
 /** Wait until the queue is empty (tests). */
-export async function idle() { while (busy || queue.length) await new Promise((r) => setTimeout(r, 20)); }
+export async function idle() { while (active.size || queue.length) await new Promise((r) => setTimeout(r, 20)); }
 
 async function execute(id) {
   const row = runRow(id);
@@ -568,7 +571,7 @@ export function listRuns(q = {}) {
     return { id: r.id, created_at: r.created_at, finished_at: r.finished_at, status: r.status, name: r.name, purpose: r.purpose,
       variant: JSON.parse(r.options).variant, before: first?.ai ?? null, after: rounds.length > 1 ? last.ai : null,
       rounds: Math.max(0, rounds.length - 1), cost: r.cost, tokens: r.tokens_in + r.tokens_out, message: r.message, batch: r.batch };
-  }), monthSpent: monthSpent(), settings: settings(), queue: queue.length + (busy ? 1 : 0) };
+  }), monthSpent: monthSpent(), settings: settings(), queue: queue.length + active.size };
 }
 
 export function exportRun(id, format) {
