@@ -46,3 +46,14 @@ test("a link to a money page counts even when that page failed to load in this c
   assert.deepEqual(conversionIssues(pages, links, S + "/"), []);
   assert.deepEqual(conversionIssues([page("/blog/guide-e", { convCta: 1 })], links, S + "/"), []);
 });
+
+test("first-hand lines are counted in any industry; articles of 300+ words with none are flagged", async () => {
+  const { firstHandCount } = await import("../src/conversion.mjs");
+  assert.equal(firstHandCount("In our workshop we often see worn pads. When we test them, our mechanics check the rotors too."), 4);
+  assert.equal(firstHandCount("At our clinic patients often ask about this. I tested three brands."), 2);
+  assert.equal(firstHandCount("Brake pads wear over time. Replace them when the warning light comes on."), 0);
+  const art = (p, firstHand, words) => ({ ...page(p, { convCta: 1, firstHand }), words });
+  const links = new Map([[S + "/blog/a", [S + "/pricing"]], [S + "/blog/b", [S + "/pricing"]], [S + "/blog/c", [S + "/pricing"]]]);
+  const out = conversionIssues([art("/blog/a", 0, 900), art("/blog/b", 2, 900), art("/blog/c", 0, 150), page("/pricing", { convForm: 1 })], links, S + "/");
+  assert.deepEqual(out.filter((x) => x[0] === "article_no_first_hand").map((x) => x[1]), [S + "/blog/a"], "short posts and posts with first-hand lines pass");
+});

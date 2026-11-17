@@ -9,7 +9,7 @@ import { CHECKS, pageIssues, healthScore } from "./checks.mjs";
 import { crawlabilitySiteIssues, paramTraps, headClosedEarly, robotsDiff, faviconIssues, historyTraps, scriptTrapIssues, robotsBlockedIssues } from "./crawlability.mjs";
 import { aiPageIssues, aiSiteIssues, aiBotAccess, aiReadiness } from "./ai-checks.mjs";
 import { similarForAudit, crawlerAccess, lastmodUniformity, lastmodChanged } from "./quality.mjs";
-import { conversionIssues } from "./conversion.mjs";
+import { conversionIssues, firstHandCount } from "./conversion.mjs";
 import { robotsDirectives, applyHeaderRobots, canonicalHrefProblem, linkHeaderCanonical, textFingerprint, canonicalSiteIssues, soft404Issues } from "./google-signals.mjs";
 import { loadSitemaps } from "./sitemaps.mjs";
 import { rawRenderedDiff, renderPage, renderFindings, mergeRender, jsRedirectOf } from "./render-checks.mjs";
@@ -288,6 +288,7 @@ export function parseHtml(html, url) {
   const scope = $t("main").length ? $t("main") : $t("body");
   const text = scope.text().replace(/\s+/g, " ").trim();
   const words = text ? text.split(" ").length : 0;
+  d.firstHand = firstHandCount(text); // lines from the business's own work (article_no_first_hand, conversion.mjs)
   // Video embeds and their position, images, spam words, keyword stuffing, script hosts (page-signals.mjs).
   Object.assign(d, pageSignals($, { url, $c, text }));
   Object.assign(d, domFacts($, { text, lang: d.lang })); // form labels, button names, lang value, readability (extra-checks.mjs)
