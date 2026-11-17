@@ -76,6 +76,7 @@ export const NOTES = {
   "GET /api/writer/runs": "q: `batch`. Recent Human Writer runs with before and after scores, rounds, cost and status.",
   [`GET /api/writer/runs/:runId`]: "One run: every round's block scores, fact check, AI phrases, final text, meaning check, cost.",
   [`POST /api/writer/runs/:runId/stop`]: "Stops a run after its current step (or removes it from the queue).",
+  [`POST /api/writer/runs/:runId/restyle`]: "Queues only the style repair (and the meaning check) on a finished run's output; no new writing rounds.",
   [`GET /api/writer/runs/:runId/export`]: "q: `format` (md, txt or docx). The final text as a download.",
   "POST /api/writer/batch": "body: `folder` (read only), `urls` (pages; main content as Markdown, robots.txt obeyed) or `texts`, plus the run options. Queues every .md and .txt file; results are saved to data/writer-out/<batch>/.",
   "GET /api/autostart": "Desktop: whether the app starts with Windows.",

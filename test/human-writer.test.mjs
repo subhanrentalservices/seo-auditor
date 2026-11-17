@@ -25,6 +25,8 @@ W.setClaude(async (prompt) => {
   if (prompt.includes("List every fact")) return { text: "- 5 MB limit\n- link to /help", cost: 0.01, tokensIn: 100, tokensOut: 10 };
   if (prompt.includes("Compare the ORIGINAL")) return { text: '{"ok": true, "issues": []}', cost: 0.01, tokensIn: 100, tokensOut: 10 };
   if (prompt.includes("PARAGRAPHS TO REWRITE")) return { text: blockReply(prompt), cost: 0.02, tokensIn: 500, tokensOut: 50 };
+  // style repair: the stub texts repeat one word, so ai-check always asks; here nothing changes and it costs nothing
+  if (prompt.includes("a style check found")) return { text: `<text>${prompt.split("\nTEXT\n")[1]}</text>`, cost: 0, tokensIn: 0, tokensOut: 0 };
   // whole-text write: second paragraph still sounds like a draft, colour in US text gets fixed by fixVariant
   return { text: `<text>## Upload\n\n${P1.replace("can be", "is")}\n\n${P2}\n</text>`, cost: 0.05, tokensIn: 1000, tokensOut: 200 };
 });
@@ -257,6 +259,54 @@ test("a low round with a lost fact is repaired instead of thrown away, and a mea
   assert.equal(r.meaning.ok, true);
   assert.equal(r.status, "passed", r.message);
   assert.equal(seen.filter((p) => p.includes("Fix only these problems")).length, 2);
+});
+
+test("a style-check failure gets one repair call, kept when facts hold and style improves; restyle reruns only that", async () => {
+  // varied, natural prose (passes ai-check style) vs the same facts in a stiff, repetitive draft
+  const human = [
+    "We fixed the bumper on Tuesday. It took most of the morning, mainly because the clips behind the cover had snapped and the supplier only had two left, so Sam drove over to collect them before lunch.",
+    "Files up to 5 MB go through on the free plan, see [help](/help). Bigger ones need a paid account, and the upload page tells you which before you start.",
+    "Paint matching is slower than people expect. A metallic silver can look right under the workshop lights and wrong in the car park, so we spray a test card first and check it outside in daylight. Sometimes twice.",
+    "If something looks off after you pick the car up, ring us. Most small things are a ten-minute job.",
+  ].join("\n\n");
+  const stiff = Array.from({ length: 14 }, (_, i) => `The team checks the car, the paint and the panels on day ${i + 1}, and the team checks the car again before the car goes back. The team notes files up to 5 MB, see [help](/help).`).join("\n\n");
+  const { aiCheck } = await import("../src/ai-check.mjs");
+  assert.equal(aiCheck(human, "text").pass, true, JSON.stringify(aiCheck(human, "text").style));
+  assert.equal(aiCheck(stiff, "text").pass, false);
+  const seen = [];
+  W.setClaude(async (prompt) => {
+    seen.push(prompt);
+    const z = { cost: 0, tokensIn: 0, tokensOut: 0 };
+    if (prompt.includes("List every fact")) return { text: "- 5 MB limit\n- link to /help", ...z };
+    if (prompt.includes("Compare the ORIGINAL")) return { text: '{"ok":true,"issues":[]}', ...z };
+    if (prompt.includes("a style check found")) return { text: `<text>${human}</text>`, ...z };
+    return { text: `<text>${stiff}</text>`, ...z };
+  });
+  const { id } = W.startRun({ text: human, maxRounds: 1 });
+  await W.idle();
+  let r = W.getRun(id);
+  assert.deepEqual(r.rounds.map((x) => x.label), ["Source", "Written by Claude", "Style repair"]);
+  assert.equal(r.output.trim(), human);
+  const stylePrompts = seen.filter((p) => p.includes("a style check found"));
+  assert.equal(stylePrompts.length, 1);
+  assert.match(stylePrompts[0], /Every section keeps its number of paragraphs/);
+  // a repair that loses a fact is not kept
+  W.setClaude(async (prompt) => ({ text: prompt.includes("a style check found") ? `<text>${human.replace("5 MB", "small")}</text>`
+    : prompt.includes("Compare the ORIGINAL") ? '{"ok":true,"issues":[]}' : prompt.includes("List every fact") ? "- 5 MB limit" : `<text>${stiff}</text>`, cost: 0, tokensIn: 0, tokensOut: 0 }));
+  const b = W.startRun({ text: human, maxRounds: 1 });
+  await W.idle();
+  r = W.getRun(b.id);
+  assert.deepEqual(r.rounds.map((x) => x.label), ["Source", "Written by Claude"]);
+  assert.match(r.output, /day 1/);
+  // restyle: the saved output gets only the style repair, no new writing rounds
+  W.setClaude(async (prompt) => ({ text: prompt.includes("a style check found") ? `<text>${human}</text>` : '{"ok":true,"issues":[]}', cost: 0, tokensIn: 0, tokensOut: 0 }));
+  assert.equal(W.restyleRun(b.id).id, b.id);
+  await W.idle();
+  r = W.getRun(b.id);
+  assert.deepEqual(r.rounds.map((x) => x.label), ["Source", "Written by Claude", "Style repair"]);
+  assert.equal(r.output.trim(), human);
+  assert.ok(["done", "passed"].includes(r.status));
+  assert.throws(() => W.restyleRun(999999), /not found/i);
 });
 
 test("with concurrency 2 two runs overlap, and the setting is capped at 3", async () => {
