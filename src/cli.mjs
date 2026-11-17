@@ -140,6 +140,17 @@ if (cmd === "add") {
     if (d) for (const c of det[i].chunks.filter((c) => (c.ai ?? 0) >= 0.5)) console.log(`   detector: ${Math.round(c.ai * 100)}% AI: "${c.text.slice(0, 110)}…"`);
   });
   process.exitCode = failed ? 1 : 0;
+} else if (cmd === "serp-fit") {
+  // serp-fit <file.json> [--our-dr 5] [--our-domain example.com]: file = [{ keyword, ourType, rows: [{ url, title, dr }] }]
+  // (top 10 from any source). Prints go / hard / skip and whether our page type matches the format Google picked.
+  const { serpFit } = await import("./serp-fit.mjs");
+  const { readFileSync } = await import("node:fs");
+  const a = process.argv.slice(3), opt = (n) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : undefined; };
+  const items = JSON.parse(readFileSync(a.find((x) => !x.startsWith("--") && !/^\d+$/.test(x) && x !== opt("--our-domain")), "utf8"));
+  for (const it of items) {
+    const r = serpFit({ ...it, ourDr: Number(opt("--our-dr") ?? it.ourDr ?? 0), ourDomain: opt("--our-domain") ?? it.ourDomain ?? "" });
+    console.log(`${r.verdict.toUpperCase().padEnd(4)} ${r.keyword}: ${r.formatMatch === false ? "FORMAT MISMATCH; " : ""}${r.notes.join("; ")}`);
+  }
 } else if (cmd === "ai-detect") {
   // ai-detect <file.html|file.md|file.txt|url|-> [...] [--json] [--signals tuned,desklib,fakespot,binoculars]:
   // model-based AI-text likelihood, GPTZero-style, run locally (detector/detect.py, fine-tuned DeBERTa by default).
