@@ -23,7 +23,7 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | GET | `/api/audits/:auditId/export/issues.csv` | Issues CSV (also `pages.csv` with custom extraction columns, and `links.csv`). |
 | any | `/lv/…`, `/api/s/…`, `/s/…`, `/fonts/…` | Link building: passed to the link engine on 127.0.0.1:4561. |
 
-## Routes (141)
+## Routes (142)
 
 ### core (server.mjs, api.mjs)
 
@@ -169,6 +169,12 @@ The web app talks to a local JSON API. Generated from the routes the server regi
 | Method | Path | Parameters and notes |
 |---|---|---|
 | GET | `/api/projects/:projectId/query-alignment` | Title/H1 gaps, unanswered question searches, intent mix, merge candidates. q: `min` question impressions (default 10). |
+
+### intent-gap.mjs
+
+| Method | Path | Parameters and notes |
+|---|---|---|
+| GET | `/api/projects/:projectId/intent-gap` | Search intent gap: pages with good impressions and a low CTR, their low-CTR searches, page 1/2/3-4/5+ band, searches no H2/H3 answers, pages Google shows to link from, steps (title last). q: `minPage` (100), `minQuery` (10), `maxCtr` (0.02). |
 
 ### reclaim.mjs
 

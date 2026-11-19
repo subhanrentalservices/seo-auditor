@@ -93,6 +93,7 @@ export const NOTES = {
   [`POST /api/projects/${P}/citations/check`]: "Fetches every listing page and checks name, address and phone.",
   [`GET /api/projects/${P}/decay`]: "Pages losing clicks or impressions (Search Console history).",
   [`GET /api/projects/${P}/query-alignment`]: "Title/H1 gaps, unanswered question searches, intent mix, merge candidates. q: `min` question impressions (default 10).",
+  [`GET /api/projects/${P}/intent-gap`]: "Search intent gap: pages with good impressions and a low CTR, their low-CTR searches, page 1/2/3-4/5+ band, searches no H2/H3 answers, pages Google shows to link from, steps (title last). q: `minPage` (100), `minQuery` (10), `maxCtr` (0.02).",
   [`GET /api/projects/${P}/lost-urls`]: "Gone or wrongly redirected URLs that had value, with a 301 target for each.",
   [`GET /api/audits/${A}/link-graph`]: "Internal link graph: nodes, edges, orphans, depth.",
   [`GET /api/projects/${P}/trends`]: "Search Console trend findings (rising and falling searches and pages).",

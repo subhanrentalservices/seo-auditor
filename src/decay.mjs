@@ -18,7 +18,7 @@ export function compare(cur, base) {
   if (!imp) { cause = "gone"; advice = "No longer shown in Google at all. Check it still returns 200, is indexable and is in the sitemap; then inspect the URL in Search Console."; }
   else if (posNow - posThen >= 2) { cause = "rank"; advice = "It ranks lower than before. Compare it with the pages now above it: update facts and sections they cover, fix the intent if they are a different page type, and link to it from strong pages."; }
   else if (imp < 0.7 * base.impressions) { cause = "demand"; advice = "Shown less often at a similar position: fewer people search for this now (season or trend). Check the same period last year before rewriting."; }
-  else { cause = "ctr"; advice = "Shown as often at a similar position but clicked less. Look at the results page (AI Overview, ads, map pack, competitors' titles) and rewrite the title and description to answer the search better."; }
+  else { cause = "ctr"; advice = "Shown as often at a similar position but clicked less. Intent first, title last: search it, read the top results and the AI Overview, add what the page is missing, and only then refresh the title and description (Search intent gap report)."; }
   return { lost, pct: lost / base.clicks, clicksThen: base.clicks, impressionsThen: base.impressions, positionThen: posThen, cause, advice };
 }
 
